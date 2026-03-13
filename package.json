@@ -1,0 +1,46 @@
+{
+  "name": "azurefetch",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Minimal Azure token helpers for modern runtimes",
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "scripts": {
+    "prepare": "if command -v git >/dev/null 2>&1; then lefthook install; fi",
+    "build": "obuild",
+    "dev": "vitest",
+    "lint": "oxlint .",
+    "lint:type": "oxlint . --type-aware",
+    "lint:fix": "oxlint . --fix",
+    "typecheck": "bun run lint:type",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "oxfmt --check && oxlint . && oxlint . --type-aware && vitest run && obuild"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.4.4",
+    "@commitlint/config-conventional": "^20.4.4",
+    "@types/node": "^24.0.0",
+    "lefthook": "^2.1.4",
+    "obuild": "^0.4.32",
+    "oxfmt": "^0.40.0",
+    "oxlint": "^1.55.0",
+    "oxlint-tsgolint": "^0.16.0",
+    "typescript": "^5.8.0",
+    "vitest": "^4.1.0"
+  },
+  "packageManager": "bun@1.3.10"
+}
