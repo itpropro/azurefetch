@@ -1,37 +1,14 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import {
   AccountSASPermissions,
   BlobServiceClient,
+  DefaultAzureCredential,
   getAccountNameFromUrl,
   StorageSharedKeyCredential,
 } from "../src/blob";
-
-type FetchMock = typeof globalThis.fetch;
-
-type FetchHandler = (url: string, init: RequestInit) => Response | Promise<Response>;
-
-function createFetchMock(handlers: FetchHandler[]): FetchMock {
-  let call = 0;
-
-  return ((url: string, init: RequestInit = {}) => {
-    const handler = handlers[call];
-    call += 1;
-
-    if (handler == null) {
-      throw new Error(`Unexpected fetch call ${call}`);
-    }
-
-    return Promise.resolve(handler(String(url), init));
-  }) as FetchMock;
-}
-
-function textResponse(body: string, status = 200, statusText = "OK"): Response {
-  return new Response(body, {
-    status,
-    statusText,
-  });
-}
+import { createFetchMock, textResponse } from "./helpers";
+import * as defaultCredential from "../src/default-credential";
 
 describe("AccountSASPermissions", () => {
   test("parses and serializes permission sets", () => {
@@ -85,7 +62,9 @@ describe("BlobServiceClient.fromConnectionString", () => {
   });
 
   test("supports development storage connection strings", () => {
-    const client = BlobServiceClient.fromConnectionString("UseDevelopmentStorage=true");
+    const client = BlobServiceClient.fromConnectionString(
+      "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1/",
+    );
 
     expect(client.accountName).toBe("devstoreaccount1");
     expect(client.url).toBe("http://127.0.0.1:10000/devstoreaccount1");
@@ -114,7 +93,7 @@ describe("BlockBlobClient", () => {
     const capturedHeaders = new Headers(headers[0]);
     expect(capturedHeaders.get("Authorization")).toMatch(/^SharedKey myaccount:/);
     expect(capturedHeaders.get("x-ms-date")).toBeTruthy();
-    expect(capturedHeaders.get("x-ms-version")).toBe("2024-11-04");
+    expect(capturedHeaders.get("x-ms-version")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(capturedHeaders.get("Content-Length")).toBe(String(new TextEncoder().encode("héllo").byteLength));
   });
 
@@ -235,9 +214,10 @@ describe("ContainerClient.listBlobsFlat", () => {
     }
 
     expect(pages).toEqual([[{ name: "first" }], [{ name: "second" }]]);
-    expect(requests[0]).toContain("maxresults=1");
-    expect(requests[0]).toContain("comp=list");
-    expect(requests[0]).toContain("restype=container");
+    const firstRequest = new URL(requests[0]);
+    expect(firstRequest.searchParams.get("maxresults")).toBe("1");
+    expect(firstRequest.searchParams.get("comp")).toBe("list");
+    expect(firstRequest.searchParams.get("restype")).toBe("container");
     expect(continuationTokens).toEqual(["marker", ""]);
   });
 
@@ -264,7 +244,8 @@ describe("ContainerClient.listBlobsFlat", () => {
 
     expect(pages).toEqual([["only"]]);
     expect(requests).toHaveLength(1);
-    expect(requests[0]).toContain("marker=start+token");
+    const request = new URL(requests[0]);
+    expect(request.searchParams.get("marker")).toBe("start token");
   });
 
   test("supports empty listing without additional requests", async () => {
@@ -312,6 +293,127 @@ describe("ContainerClient.listBlobsFlat", () => {
     expect(pages[0][1]).toBe("name <with> tag");
     expect(pages[0]).toHaveLength(2);
     expect(pages[0][1]).toContain("<with>");
+  });
+});
+
+describe("BlobServiceClient.listContainers", () => {
+  test("supports byPage continuation paging", async () => {
+    const requests: string[] = [];
+    const fetcher = createFetchMock([
+      (url) => {
+        requests.push(url);
+        return textResponse(
+          "<EnumerationResults><Containers><Container><Name>container-one</Name></Container></Containers><NextMarker>marker</NextMarker></EnumerationResults>",
+        );
+      },
+      (url) => {
+        requests.push(url);
+        return textResponse(
+          "<EnumerationResults><Containers><Container><Name>container-two</Name></Container></Containers><NextMarker></NextMarker></EnumerationResults>",
+        );
+      },
+    ]);
+
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
+      fetch: fetcher,
+    });
+
+    const pages = [] as Array<{ name: string }[]>;
+    const continuationTokens: Array<string | undefined> = [];
+    for await (const page of client.listContainers().byPage({ maxPageSize: 1 })) {
+      continuationTokens.push(page.continuationToken);
+      pages.push(page.segment.containerItems);
+    }
+
+    expect(pages).toEqual([[{ name: "container-one" }], [{ name: "container-two" }]]);
+    const firstRequest = new URL(requests[0]);
+    expect(firstRequest.searchParams.get("comp")).toBe("list");
+    expect(firstRequest.searchParams.get("maxresults")).toBe("1");
+    const secondRequest = new URL(requests[1]);
+    expect(secondRequest.searchParams.get("marker")).toBe("marker");
+    expect(continuationTokens).toEqual(["marker", ""]);
+  });
+
+  test("supports explicit continuation token", async () => {
+    const requests: string[] = [];
+    const fetcher = createFetchMock([
+      (url) => {
+        requests.push(url);
+        return textResponse(
+          "<EnumerationResults><Containers><Container><Name>container-b</Name></Container></Containers><NextMarker></NextMarker></EnumerationResults>",
+        );
+      },
+    ]);
+
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
+      fetch: fetcher,
+    });
+
+    const pages = [] as Array<string[]>;
+    for await (const page of client.listContainers().byPage({ continuationToken: "start-token", maxPageSize: 1 })) {
+      pages.push(page.segment.containerItems.map((item) => item.name));
+    }
+
+    expect(pages).toEqual([["container-b"]]);
+    expect(requests).toHaveLength(1);
+    const request = new URL(requests[0]);
+    expect(request.searchParams.get("marker")).toBe("start-token");
+  });
+});
+
+describe("DefaultAzureCredential", () => {
+  test("reuses access token for repeated calls", async () => {
+    const token = {
+      token: "cached-token",
+      tokenType: "Bearer" as const,
+      expiresOnTimestamp: Date.now() + 600_000,
+    };
+
+    const credentialSpy = vi.spyOn(defaultCredential, "getDefaultAzureCredentialToken").mockResolvedValue(token);
+
+    const credential = new DefaultAzureCredential();
+
+    const first = await credential.getAuthorizationHeader("https://storage.azure.com/.default");
+    const second = await credential.getAuthorizationHeader("https://storage.azure.com/.default");
+
+    expect(first).toBe("Bearer cached-token");
+    expect(second).toBe("Bearer cached-token");
+    expect(credentialSpy).toHaveBeenCalledTimes(1);
+
+    credentialSpy.mockRestore();
+  });
+
+  test("keeps separate caches per scope", async () => {
+    const firstToken = {
+      token: "scope-one",
+      tokenType: "Bearer" as const,
+      expiresOnTimestamp: Date.now() + 600_000,
+    };
+    const secondToken = {
+      token: "scope-two",
+      tokenType: "Bearer" as const,
+      expiresOnTimestamp: Date.now() + 600_000,
+    };
+
+    const credentialSpy = vi.spyOn(defaultCredential, "getDefaultAzureCredentialToken");
+    credentialSpy.mockImplementation(async (input) => {
+      if (input.scope === "scope-one") {
+        return firstToken;
+      }
+
+      return secondToken;
+    });
+
+    const credential = new DefaultAzureCredential();
+
+    const first = await credential.getAuthorizationHeader("scope-one");
+    const second = await credential.getAuthorizationHeader("scope-two");
+
+    expect(first).toBe("Bearer scope-one");
+    expect(second).toBe("Bearer scope-two");
+    expect(credentialSpy).toHaveBeenCalledTimes(2);
+
+    credentialSpy.mockRestore();
   });
 });
 

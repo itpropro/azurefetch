@@ -1,70 +1,18 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { TokenUnavailableError } from "../src/errors";
 import { getManagedIdentityToken } from "../src/managed-identity";
-
-type FetchMock = typeof globalThis.fetch;
-
-function createFetchMock(
-  handlers: Array<(url: string, init?: RequestInit) => Response | Promise<Response>>,
-): FetchMock {
-  let call = 0;
-
-  return vi.fn(async (url: string, init: RequestInit = {}) => {
-    const handler = handlers[call];
-
-    if (handler == null) {
-      throw new Error("Unexpected fetch call");
-    }
-
-    call += 1;
-    return handler(String(url), init);
-  }) as FetchMock;
-}
-
-function jsonResponse(body: unknown, status = 200, statusText = "OK"): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    statusText,
-    headers: {
-      "content-type": "application/json",
-    },
-  });
-}
-
-function getBodyString(body: RequestInit["body"]): string {
-  if (typeof body === "string") {
-    return body;
-  }
-
-  if (body instanceof URLSearchParams) {
-    return body.toString();
-  }
-
-  return "";
-}
+import { captureEnv, createFetchMock, getBodyString, jsonResponse, restoreEnv } from "./helpers";
 
 describe("getManagedIdentityToken", () => {
   let originalEnv: NodeJS.ProcessEnv;
 
   beforeEach(() => {
-    originalEnv = { ...process.env };
+    originalEnv = captureEnv();
   });
 
   afterEach(() => {
-    for (const key of Object.keys(process.env)) {
-      if (!(key in originalEnv)) {
-        delete process.env[key];
-      }
-    }
-
-    for (const [key, value] of Object.entries(originalEnv)) {
-      if (value == null) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    restoreEnv(originalEnv);
   });
 
   test("rejects missing or non-default scope", async () => {

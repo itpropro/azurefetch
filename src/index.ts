@@ -15,8 +15,12 @@ export {
 } from "./blob";
 export type {
   BlobDeleteIfExistsResponse,
+  ContainerItem,
   BlobGetPropertiesResponse,
   BlobItem,
   ListBlobsFlatSegment,
+  ListContainersSegment,
   ContainerCreateIfNotExistsResponse,
 } from "./blob";
+export { TableClient, TableServiceClient } from "./table";
+export type { TableCreateIfNotExistsResponse, TableDeleteResponse, TableEntity, TableEntityResponse } from "./table";

@@ -1,7 +1,8 @@
 import { createHmac } from "node:crypto";
 
 import { getDefaultAzureCredentialToken } from "./default-credential";
-import type { AccessToken } from "./types";
+import { createTokenProvider } from "./provider";
+import type { AccessToken, TokenProvider } from "./types";
 
 const storageOAuthScope = "https://storage.azure.com/.default";
 const xmsServiceVersion = "2024-11-04";
@@ -43,6 +44,18 @@ export interface BlobGetPropertiesResponse {
   metadata: Record<string, string>;
 }
 
+export interface ContainerItem {
+  name: string;
+}
+
+export interface ListContainersSegment {
+  segment: {
+    containerItems: ContainerItem[];
+  };
+  continuationToken?: string;
+  nextMarker?: string;
+}
+
 export interface BlobDeleteIfExistsResponse {
   succeeded: boolean;
   errorCode?: string;
@@ -53,15 +66,34 @@ export interface ContainerCreateIfNotExistsResponse {
 }
 
 export class DefaultAzureCredential {
+  private readonly providers = new Map<string, TokenProvider>();
+
   constructor(private readonly options: DefaultAzureCredentialOptions = {}) {}
+
+  private getTokenProvider(scopes: string[]): TokenProvider {
+    const cacheKey = JSON.stringify(scopes);
+    const existingProvider = this.providers.get(cacheKey);
+    if (existingProvider != null) {
+      return existingProvider;
+    }
+
+    const provider = createTokenProvider({
+      loadToken: () =>
+        getDefaultAzureCredentialToken({
+          scope: scopes,
+          fetch: this.options.fetch,
+          authorityHost: this.options.authorityHost,
+        }),
+    });
+
+    this.providers.set(cacheKey, provider);
+    return provider;
+  }
 
   public async getToken(scopes: string | string[]): Promise<AccessToken> {
     const normalizedScopes = normalizeScopes(scopes);
-    return getDefaultAzureCredentialToken({
-      scope: normalizedScopes,
-      fetch: this.options.fetch,
-      authorityHost: this.options.authorityHost,
-    });
+    const provider = this.getTokenProvider(normalizedScopes);
+    return provider.getToken();
   }
 
   public async getAuthorizationHeader(scopes: string | string[] = storageOAuthScope): Promise<string> {
@@ -265,6 +297,14 @@ export class BlobServiceClient {
     return new ContainerClient(containerUrl, this.credential, this.fetcher);
   }
 
+  public listContainers(): {
+    byPage: (options?: QueryOptions) => AsyncIterable<ListContainersSegment>;
+  } {
+    return {
+      byPage: (options) => this.listContainersByPage(options),
+    };
+  }
+
   public generateAccountSasUrl(
     expiresOn = new Date(Date.now() + 60 * 60 * 1000),
     options?: {
@@ -291,8 +331,18 @@ export class BlobServiceClient {
     return signedUrl.toString();
   }
 
-  public async request(method: string, inputUrl: string, options: BlobOperationOptions = {}): Promise<Response> {
+  public async request(
+    method: string,
+    inputUrl: string,
+    options: BlobOperationOptions & { query?: Record<string, string> } = {},
+  ): Promise<Response> {
     const url = new URL(inputUrl);
+    if (options.query) {
+      for (const [name, value] of Object.entries(options.query)) {
+        url.searchParams.set(name, value);
+      }
+    }
+
     const headers = new Headers(options.headers ?? {});
     const bodyLength = getKnownBodyLength(options.body);
 
@@ -321,13 +371,50 @@ export class BlobServiceClient {
       headers.set("Authorization", `SharedKey ${this.accountName}:${signature}`);
     }
 
-    const response = await this.fetcher(inputUrl, {
+    const response = await this.fetcher(url.toString(), {
       method,
       headers,
       body: options.body,
     });
 
     return response;
+  }
+
+  private async *listContainersByPage(options?: QueryOptions): AsyncGenerator<ListContainersSegment> {
+    let continuationToken = options?.continuationToken;
+    const maxPageSize = options?.maxPageSize;
+
+    while (true) {
+      const response = await this.request("GET", this.url, {
+        query: {
+          comp: "list",
+          ...(maxPageSize != null ? { maxresults: String(maxPageSize) } : undefined),
+          ...(continuationToken != null ? { marker: continuationToken } : undefined),
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Container list failed: ${response.status} ${response.statusText}`);
+      }
+
+      const xml = await response.text();
+      const page = parseListContainersXml(xml);
+      const nextMarker = page.nextMarker;
+
+      yield {
+        segment: {
+          containerItems: page.segment.containerItems,
+        },
+        continuationToken: nextMarker,
+        nextMarker,
+      };
+
+      if (!nextMarker) {
+        break;
+      }
+
+      continuationToken = nextMarker;
+    }
   }
 }
 
@@ -558,7 +645,7 @@ export class BlockBlobClient {
 
   private async request(method: string, targetUrl: string, options: BlobOperationOptions = {}): Promise<Response> {
     const headers = new Headers(options.headers ?? {});
-    const service = new BlobServiceClientProxy(new URL(targetUrl).origin, this.credential, this.fetcher);
+    const service = new BlobServiceClientProxy(this.url, this.credential, this.fetcher);
     return service.request(method, targetUrl, {
       headers,
       body: options.body,
@@ -646,13 +733,8 @@ function normalizeScopes(scope: string | string[]): string {
 }
 
 function parseConnectionString(connectionString: string): ParsedConnectionString {
-  const useDevelopment = connectionString.startsWith("UseDevelopmentStorage=true");
-  const normalizedConnectionString = useDevelopment
-    ? "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
-    : connectionString;
-
   const parts = Object.fromEntries(
-    normalizedConnectionString
+    connectionString
       .split(";")
       .map((part) => part.trim())
       .filter((part) => part.length > 0)
@@ -771,6 +853,27 @@ function parseListBlobsFlatXml(xml: string): ListBlobsFlatSegment {
   };
 }
 
+function parseListContainersXml(xml: string): ListContainersSegment {
+  const nextMarker = extractFirst(xml, /<NextMarker>([\s\S]*?)<\/NextMarker>/)?.trim() || "";
+  const segment: ContainerItem[] = [];
+
+  const containerPattern = /<Container>([\s\S]*?)<\/Container>/g;
+  for (const match of xml.matchAll(containerPattern)) {
+    const containerXml = match[1];
+    const name = extractFirst(containerXml, /<Name>([\s\S]*?)<\/Name>/);
+    if (name == null) {
+      continue;
+    }
+
+    segment.push({ name: decodeXml(name.trim()) });
+  }
+
+  return {
+    segment: { containerItems: segment },
+    nextMarker,
+  };
+}
+
 function normalizeUploadBody(
   body: string | ArrayBuffer | ArrayBufferView | Blob,
 ): string | ArrayBuffer | ArrayBufferView | Blob {
@@ -823,7 +926,7 @@ export function getAccountNameFromUrl(url: string): string {
   const parsedUrl = new URL(url);
   const hostParts = parsedUrl.hostname.split(".");
 
-  if (hostParts[1] === "blob") {
+  if (hostParts[1] === "blob" || hostParts[1] === "table") {
     return hostParts[0] || "";
   }
 
@@ -835,36 +938,9 @@ export function getAccountNameFromUrl(url: string): string {
 }
 
 function isIpEndpointStyle(parsedUrl: URL): boolean {
-  const host = parsedUrl.host;
+  const host = parsedUrl.hostname;
 
-  return (
-    /^.*:.*:.*$|^(localhost|host.docker.internal)(:[0-9]+)?$|^([0-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])(\.([0-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])){3}(:[0-9]+)?$/.test(
-      host,
-    ) ||
-    (Boolean(parsedUrl.port) &&
-      [
-        "10000",
-        "10001",
-        "10002",
-        "10003",
-        "10004",
-        "10100",
-        "10101",
-        "10102",
-        "10103",
-        "10104",
-        "11000",
-        "11001",
-        "11002",
-        "11003",
-        "11004",
-        "11100",
-        "11101",
-        "11102",
-        "11103",
-        "11104",
-      ].includes(parsedUrl.port))
-  );
+  return host === "localhost" || host === "host.docker.internal" || /^(\d{1,3}\.){3}\d{1,3}$/.test(host);
 }
 
 function buildStringToSign(method: string, url: URL, headers: Headers, accountName: string): string {
@@ -897,7 +973,6 @@ function buildStringToSign(method: string, url: URL, headers: Headers, accountNa
     ifNoneMatch,
     ifUnmodifiedSince,
     range,
-    "",
     canonicalizedHeaders,
     canonicalizedResource,
   ].join("\n");
@@ -920,7 +995,7 @@ function canonicalizeHeaders(headers: Headers): string {
 }
 
 function canonicalizeResource(url: URL, accountName: string): string {
-  const path = url.pathname || "/";
+  const path = url.pathname;
   const canonicalizedResource = `/${accountName}${path}`;
 
   const queryParameters: Record<string, string[]> = {};

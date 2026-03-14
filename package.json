@@ -27,6 +27,8 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "vitest run",
+    "test:storage": "AZUREFETCH_RUN_STORAGE_TESTS=1 vitest run test/storage.integration.test.ts",
+    "test:storage:azurite": "AZUREFETCH_RUN_STORAGE_TESTS=1 AZUREFETCH_STORAGE_CONNECTION_STRING=UseDevelopmentStorage=true vitest run test/storage.integration.test.ts",
     "test:watch": "vitest",
     "check": "oxfmt --check && oxlint . && oxlint . --type-aware && vitest run && obuild"
   },

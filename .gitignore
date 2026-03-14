@@ -1,3 +1,11 @@
 node_modules
 dist
 pnpm-lock.yaml
+
+# Azure Storage Azurite local emulator artifacts
+__blobstorage__/
+__queuestorage__/
+__tablestorage__/
+debug.log
+.azurite/
+.azurite.json

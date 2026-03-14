@@ -9,51 +9,17 @@ vi.mock("../src/internal/process", () => ({
 import { getDefaultAzureCredentialToken } from "../src/default-credential";
 import { TokenRequestError, TokenUnavailableError } from "../src/errors";
 import { executeCommand, hasCommandExecution, isCommandUnavailable } from "../src/internal/process";
-
-type FetchMock = typeof globalThis.fetch;
+import { createFetchMock, jsonResponse, captureEnv, restoreEnv, unavailableCommandError } from "./helpers";
 
 const mockExecuteCommand = vi.mocked(executeCommand);
 const mockHasCommandExecution = vi.mocked(hasCommandExecution);
 const mockIsCommandUnavailable = vi.mocked(isCommandUnavailable);
 
-function createFetchMock(
-  handlers: Array<(url: string, init?: RequestInit) => Response | Promise<Response>>,
-): FetchMock {
-  let index = 0;
-
-  return vi.fn(async (url: string, init: RequestInit = {}) => {
-    const handler = handlers[index];
-
-    if (handler == null) {
-      throw new Error("Unexpected fetch call");
-    }
-
-    index += 1;
-    return handler(String(url), init);
-  }) as FetchMock;
-}
-
-function jsonResponse(body: unknown, status = 200, statusText = "OK"): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    statusText,
-    headers: {
-      "content-type": "application/json",
-    },
-  });
-}
-
-function unavailableCommandError(message: string): NodeJS.ErrnoException {
-  const error = new Error(message) as NodeJS.ErrnoException;
-  error.code = "ENOENT";
-  return error;
-}
-
 describe("getDefaultAzureCredentialToken", () => {
   let originalEnv: NodeJS.ProcessEnv;
 
   beforeEach(() => {
-    originalEnv = { ...process.env };
+    originalEnv = captureEnv();
 
     vi.clearAllMocks();
     mockHasCommandExecution.mockReturnValue(true);
@@ -61,19 +27,7 @@ describe("getDefaultAzureCredentialToken", () => {
   });
 
   afterEach(() => {
-    for (const key of Object.keys(process.env)) {
-      if (!(key in originalEnv)) {
-        delete process.env[key];
-      }
-    }
-
-    for (const [key, value] of Object.entries(originalEnv)) {
-      if (value == null) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    restoreEnv(originalEnv);
   });
 
   test("uses managed identity first", async () => {
