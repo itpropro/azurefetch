@@ -30,46 +30,14 @@ describe("getDefaultAzureCredentialToken", () => {
     restoreEnv(originalEnv);
   });
 
-  test("uses managed identity first", async () => {
+  test("uses service principal first", async () => {
+    process.env.AZURE_TENANT_ID = "tenant";
+    process.env.AZURE_CLIENT_ID = "client";
+    process.env.AZURE_CLIENT_SECRET = "secret";
     process.env.IDENTITY_ENDPOINT = "https://appservice.azurewebsites.net/identity";
     process.env.IDENTITY_HEADER = "my-id-token";
 
     const fetchMock = createFetchMock([
-      (url, init) => {
-        expect(new URL(url).searchParams.get("resource")).toBe("scope-resource");
-        expect(init.headers).toMatchObject({
-          Metadata: "true",
-          "X-IDENTITY-HEADER": "my-id-token",
-        });
-
-        return jsonResponse({
-          access_token: "mi-token",
-          expires_in: 3600,
-        });
-      },
-    ]);
-
-    const token = await getDefaultAzureCredentialToken({
-      scope: "scope-resource/.default",
-      fetch: fetchMock,
-    });
-
-    expect(token.token).toBe("mi-token");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(mockExecuteCommand).not.toHaveBeenCalled();
-  });
-
-  test("falls back to service principal when managed identity is unavailable", async () => {
-    process.env.AZURE_TENANT_ID = "tenant";
-    process.env.AZURE_CLIENT_ID = "client";
-    process.env.AZURE_CLIENT_SECRET = "secret";
-
-    const fetchMock = createFetchMock([
-      () =>
-        new Response("", {
-          status: 500,
-          statusText: "IMDS unavailable",
-        }),
       (url) => {
         expect(url).toBe("https://identity.test/tenant/oauth2/v2.0/token");
         return jsonResponse({
@@ -86,11 +54,40 @@ describe("getDefaultAzureCredentialToken", () => {
     });
 
     expect(token.token).toBe("sp-token");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(mockExecuteCommand).not.toHaveBeenCalled();
   });
 
-  test("falls back to Azure CLI when service principal is unavailable", async () => {
+  test("falls back to managed identity when service principal unavailable", async () => {
+    process.env.IDENTITY_ENDPOINT = "https://appservice.azurewebsites.net/identity";
+    process.env.IDENTITY_HEADER = "my-id-token";
+
+    const fetchMock = createFetchMock([
+      (url, init) => {
+        expect(new URL(url).searchParams.get("resource")).toBe("scope");
+        expect(init.headers).toMatchObject({
+          Metadata: "true",
+          "X-IDENTITY-HEADER": "my-id-token",
+        });
+
+        return jsonResponse({
+          access_token: "mi-token",
+          expires_in: 3600,
+        });
+      },
+    ]);
+
+    const token = await getDefaultAzureCredentialToken({
+      scope: "scope/.default",
+      fetch: fetchMock,
+    });
+
+    expect(token.token).toBe("mi-token");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(mockExecuteCommand).not.toHaveBeenCalled();
+  });
+
+  test("falls back to Azure CLI when managed identity is unavailable", async () => {
     const fetchMock = createFetchMock([
       () =>
         new Response("", {
@@ -176,11 +173,6 @@ describe("getDefaultAzureCredentialToken", () => {
 
     const fetchMock = createFetchMock([
       () =>
-        new Response("", {
-          status: 500,
-          statusText: "IMDS unavailable",
-        }),
-      () =>
         new Response(
           JSON.stringify({
             error: {
@@ -206,7 +198,7 @@ describe("getDefaultAzureCredentialToken", () => {
     ).rejects.toBeInstanceOf(TokenRequestError);
 
     expect(mockExecuteCommand).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   test("throws when no credentials are available", async () => {

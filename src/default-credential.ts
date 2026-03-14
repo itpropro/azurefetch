@@ -27,18 +27,6 @@ export async function getDefaultAzureCredentialToken(options: DefaultAzureCreden
   const singleScope = scopes.length === 1 ? scopes[0] : undefined;
   const singleDefaultScope = singleScope != null && singleScope.endsWith("/.default") ? singleScope : undefined;
 
-  const managedIdentityToken = await tryAcquireToken(singleDefaultScope, () =>
-    getManagedIdentityToken({
-      scope: singleDefaultScope!,
-      fetch: options.fetch,
-      probeTimeoutMs: options.probeTimeoutMs,
-    }),
-  );
-
-  if (managedIdentityToken != null) {
-    return managedIdentityToken;
-  }
-
   const tenantId = getEnv(environment, "AZURE_TENANT_ID");
   const clientId = getEnv(environment, "AZURE_CLIENT_ID");
   const clientSecret = getEnv(environment, "AZURE_CLIENT_SECRET");
@@ -58,6 +46,18 @@ export async function getDefaultAzureCredentialToken(options: DefaultAzureCreden
     if (servicePrincipalToken != null) {
       return servicePrincipalToken;
     }
+  }
+
+  const managedIdentityToken = await tryAcquireToken(singleDefaultScope, () =>
+    getManagedIdentityToken({
+      scope: singleDefaultScope!,
+      fetch: options.fetch,
+      probeTimeoutMs: options.probeTimeoutMs,
+    }),
+  );
+
+  if (managedIdentityToken != null) {
+    return managedIdentityToken;
   }
 
   const cliToken = await tryAcquireToken("azure cli", () =>

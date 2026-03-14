@@ -118,6 +118,37 @@ describe("TableServiceClient", () => {
 });
 
 describe("TableClient", () => {
+  test("caps table maxPageSize to service limits", async () => {
+    const requests: string[] = [];
+    const fetcher = createFetchMock([
+      (url) => {
+        requests.push(url);
+        return textResponse(
+          '{"value":[{"PartitionKey":"pk","RowKey":"rk"}],"odata.nextLink":"https://continuation"}',
+          200,
+        );
+      },
+    ]);
+
+    const client = new TableClient(
+      "https://myaccount.table.core.windows.net/mytable",
+      "mytable",
+      undefined,
+      fetcher,
+      "https://myaccount.table.core.windows.net",
+    );
+
+    const pages: Array<Array<unknown>> = [];
+    for await (const page of client.list().byPage({ maxPageSize: 2_000 })) {
+      pages.push(page.value);
+    }
+
+    expect(pages).toEqual([[{ partitionKey: "pk", rowKey: "rk", PartitionKey: "pk", RowKey: "rk" }]]);
+    expect(requests).toHaveLength(1);
+    const request = new URL(requests[0]);
+    expect(request.searchParams.get("$top")).toBe("1000");
+  });
+
   test("creates table via service client from table client", async () => {
     const fetcher = createFetchMock([() => textResponse("", 409)]);
     const credential = new StorageSharedKeyCredential("myaccount", Buffer.from("my-key").toString("base64"));
@@ -275,6 +306,88 @@ describe("TableClient", () => {
     const response = await client.deleteIfExists();
 
     expect(response).toEqual({ succeeded: true });
+  });
+
+  test("submits a transaction for create/update/upsert/delete operations", async () => {
+    const captured: Array<{ url: string; method?: string; body?: string; headers?: HeadersInit }> = [];
+    const fetcher = createFetchMock([
+      (url, init) => {
+        captured.push({ url, method: init.method, body: init.body as string | undefined, headers: init.headers });
+        return textResponse("", 201);
+      },
+      (url, init) => {
+        captured.push({ url, method: init.method, body: init.body as string | undefined, headers: init.headers });
+        return textResponse("", 204);
+      },
+      (url, init) => {
+        captured.push({ url, method: init.method, body: init.body as string | undefined, headers: init.headers });
+        return textResponse("", 404);
+      },
+      (url, init) => {
+        captured.push({ url, method: init.method, body: init.body as string | undefined, headers: init.headers });
+        return textResponse("", 204);
+      },
+      (url, init) => {
+        captured.push({ url, method: init.method, body: init.body as string | undefined, headers: init.headers });
+        return textResponse("", 202);
+      },
+    ]);
+
+    const client = new TableClient(
+      "https://myaccount.table.core.windows.net/my-table",
+      "my-table",
+      undefined,
+      fetcher,
+      "https://myaccount.table.core.windows.net",
+    );
+
+    const response = await client.submitTransaction([
+      { action: "create", entity: { partitionKey: "partition-a", rowKey: "row-1", value: "created" } },
+      {
+        action: "update",
+        entity: { partitionKey: "partition-a", rowKey: "row-1", value: "updated" },
+      },
+      {
+        action: "upsert",
+        entity: { partitionKey: "partition-a", rowKey: "row-2", value: "upserted" },
+      },
+      { action: "delete", partitionKey: "partition-a", rowKey: "row-3" },
+    ]);
+
+    expect(response.status).toBe(202);
+    expect(response.subResponses).toEqual([{ status: 201 }, { status: 204 }, { status: 204 }, { status: 202 }]);
+
+    expect(captured).toHaveLength(5);
+    expect(captured[0]).toMatchObject({
+      method: "POST",
+      url: "https://myaccount.table.core.windows.net/my-table",
+    });
+    expect(JSON.parse(captured[0].body || "{}")).toEqual({
+      PartitionKey: "partition-a",
+      RowKey: "row-1",
+      value: "created",
+    });
+
+    expect(captured[1]).toMatchObject({
+      method: "PUT",
+      url: "https://myaccount.table.core.windows.net/my-table(PartitionKey='partition-a',RowKey='row-1')",
+    });
+    expect(new Headers(captured[1].headers || {}).get("If-Match")).toBe("*");
+
+    expect(captured[2]).toMatchObject({
+      method: "PUT",
+      url: "https://myaccount.table.core.windows.net/my-table(PartitionKey='partition-a',RowKey='row-2')",
+    });
+
+    expect(captured[3]).toMatchObject({
+      method: "POST",
+      url: "https://myaccount.table.core.windows.net/my-table",
+    });
+
+    expect(captured[4]).toMatchObject({
+      method: "DELETE",
+      url: "https://myaccount.table.core.windows.net/my-table(PartitionKey='partition-a',RowKey='row-3')",
+    });
   });
 
   test("maps table delete if-not-exists response", async () => {

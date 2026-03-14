@@ -1,23 +1,121 @@
 # azurefetch
 
-Minimal, dependency-free Azure credential helpers for token acquisition in modern runtimes.
+Minimal, dependency-free Azure fetch utilities for modern runtimes.
 
 ## Usage
 
 Import helpers from the package entrypoint:
 
 ```ts
-import { getServicePrincipalToken } from "azurefetch";
-import { getDefaultAzureCredentialToken } from "azurefetch";
-import { getAuthorizationHeader } from "azurefetch";
+import {
+  AzureClient,
+  downloadJson,
+  downloadText,
+  getEntity,
+  listEntitiesPage,
+  uploadText,
+  upsertEntity,
+} from "azurefetch";
+import { getAuthorizationHeader, getDefaultAzureCredentialToken, getServicePrincipalToken } from "azurefetch";
 ```
+
+### Azure fetch-first client
+
+`AzureClient` is the preferred entrypoint for standard request flows. It signs requests with AAD token headers and delegates to `fetch`.
+
+```ts
+import { AzureClient } from "azurefetch";
+
+const client = new AzureClient({
+  scope: "https://storage.azure.com/.default",
+  authorityHost: "https://login.microsoftonline.com",
+});
+
+const request = await client.sign("https://example.blob.core.windows.net/container/hello.txt", {
+  method: "GET",
+  headers: {
+    "x-ms-version": "2024-11-04",
+  },
+  azure: {
+    // optional per-request overrides:
+    // scope: "https://graph.microsoft.com/.default",
+    // credential: anotherCredential,
+    // authorityHost: "https://login.partner.microsoftonline.com",
+  },
+});
+
+const response = await client.fetch("https://example.blob.core.windows.net/container/hello.txt", {
+  method: "GET",
+  azure: {
+    scope: "https://storage.azure.com/.default",
+  },
+});
+
+console.log(response.status);
+```
+
+### Convenience helpers
+
+Use these tiny helpers for common blob/table operations:
+
+```ts
+import {
+  AzureClient,
+  downloadJson,
+  downloadText,
+  getEntity,
+  listEntitiesPage,
+  upsertEntity,
+  uploadText,
+} from "azurefetch";
+
+const client = new AzureClient({
+  scope: "https://storage.azure.com/.default",
+});
+
+await uploadText(client, "https://myaccount.blob.core.windows.net/container/hello.txt", "hello");
+
+const textResult = await downloadText(client, "https://myaccount.blob.core.windows.net/container/hello.txt");
+console.log(textResult.text);
+
+const config = await downloadJson<{ mode: string }>(
+  client,
+  "https://myaccount.blob.core.windows.net/container/config.json",
+);
+console.log(config.value.mode);
+
+const entity = await getEntity(client, "https://myaccount.table.core.windows.net/my-table", "pk", "rk");
+console.log(entity.entity?.rowKey);
+
+await upsertEntity(client, "https://myaccount.table.core.windows.net/my-table", {
+  partitionKey: "pk",
+  rowKey: "rk",
+  value: 1,
+});
+
+for await (const page of listEntitiesPage(client, "https://myaccount.table.core.windows.net/my-table", {
+  maxPageSize: 100,
+})) {
+  console.log(page.entities.length);
+  if (page.continuationToken != null) {
+    console.log(page.continuationToken);
+  }
+}
+```
+
+`AzureClient` accepts credentials implementing one of:
+
+- `getAuthorizationHeader(scope?)`
+- `getToken(scopes)`
+
+If no credential is passed, it falls back to `getDefaultAzureCredentialToken()`.
 
 ### Default credential chain
 
 `getDefaultAzureCredentialToken` tries credentials in this order:
 
-1. managed identity (`/.default` scope)
-2. environment service principal (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`)
+1. environment service principal (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`)
+2. managed identity (`/.default` scope)
 3. Azure CLI (`az account get-access-token`)
 4. Azure PowerShell (`Get-AzAccessToken` via `pwsh` or `powershell`)
 
@@ -33,9 +131,9 @@ const token = await getDefaultAzureCredentialToken({
 console.log(token.token);
 ```
 
-### Blob compatibility APIs
+### Compatibility APIs
 
-For unstorage and lightweight migration scenarios, this package also exposes a small subset of Azure Storage Blob APIs:
+For compatibility, this package also exposes a small subset of Azure Storage APIs:
 
 ```ts
 import {
@@ -51,10 +149,11 @@ import {
 const service = new BlobServiceClient("https://myaccount.blob.core.windows.net", new DefaultAzureCredential());
 
 const container = service.getContainerClient("my-container");
-const blob = container.getBlockBlobClient("greeting.txt");
+// BlockBlobClient is created via `getBlockBlobClient` and is not a top-level export.
+const blobClient = container.getBlockBlobClient("greeting.txt");
 
-await blob.upload("hello");
-const response = await blob.download(0, 5);
+await blobClient.upload("hello");
+const response = await blobClient.download(0, 5);
 const text = await response.text();
 
 const tableService = new TableServiceClient(
@@ -79,17 +178,18 @@ for await (const page of tableClient.list().byPage({ maxPageSize: 100 })) {
 }
 ```
 
-Supported compatibility surface:
+Supported API surface:
 
 | Client                       | Methods                                                                                                  |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `AzureClient`                | `fetch`, `sign`                                                                                          |
+| `Convenience helpers`        | `uploadText`, `downloadText`, `downloadJson`, `getEntity`, `upsertEntity`, `listEntitiesPage`            |
 | `DefaultAzureCredential`     | `getToken`, `getAuthorizationHeader`                                                                     |
 | `StorageSharedKeyCredential` | constructor, `computeHMACSHA256`                                                                         |
 | `AccountSASPermissions`      | `parse`, `toString`                                                                                      |
 | `BlobServiceClient`          | `fromConnectionString`, `getContainerClient`, `generateAccountSasUrl`, `listContainers().byPage(...)`    |
-| `ContainerClient`            | `createIfNotExists`, `deleteIfExists`, `exists`, `listBlobsFlat().byPage(...)`                           |
-| `BlockBlobClient`            | `upload`, `download`, `downloadToBuffer`, `deleteIfExists`, `exists`, `getProperties`                    |
-| `TableServiceClient`         | `fromConnectionString`, `getTableClient`, `createTableIfNotExists`, `deleteTableIfNotExists`             |
+| `ContainerClient`            | `createIfNotExists`, `deleteIfExists`, `exists`, `listBlobsFlat().byPage(...)`, `getBlockBlobClient`     |
+| `TableServiceClient`         | `fromConnectionString`, `getTableClient`, `createTableIfNotExists`, `deleteTableIfExists`                |
 | `TableClient`                | `createIfNotExists`, `deleteIfExists`, `getEntity`, `upsertEntity`, `deleteEntity`, `list().byPage(...)` |
 | Utilities                    | `getAccountNameFromUrl`                                                                                  |
 
@@ -153,15 +253,24 @@ bun run test:storage:azurite
 
 Live service-principal runs can be slower than local Azurite runs due network latency.
 
-The integration suite validates create/list/read/write/delete for blobs and tables and removes all created resources in cleanup.
+The integration suite validates create/list/read/write/delete for blobs and tables, and removes all created resources in cleanup.
 
 ## Standalone storage benchmark
 
-The repository includes an opt-in benchmark that runs real Azure Storage operations for blob/table workflows:
+The repository includes an opt-in benchmark that runs real Azure Storage operations for blob/table workflows. By default it performs 5 iterations plus 1 warmup run:
 
 - create container, upload, download, list containers, list blobs, delete blob/container
 - create table, upsert entity, get entity, list entities, delete entity/table
-- warmup iterations (excluded from summary) and percentile summaries
+- warmup iterations (excluded from summary)
+- compares two drivers by default: library-native storage client surface and Azure SDK
+- blob batch delete benchmark (runs with the same warmup/iteration settings), defaulting to 50 blobs and configurable with `AZUREFETCH_BENCHMARK_BATCH_SIZE`
+- percentile summaries when run with `--detailed` or `AZUREFETCH_BENCHMARK_DETAILED=1`
+
+Driver selection can be controlled with:
+
+- `AZUREFETCH_BENCHMARK_DRIVER=native` (library-native implementation only)
+- `AZUREFETCH_BENCHMARK_DRIVER=sdk` (SDK-only implementation)
+- `AZUREFETCH_BENCHMARK_DRIVER=both` (default, run both for side-by-side output)
 
 Enable it with `AZUREFETCH_RUN_STORAGE_BENCHMARK=1` and the same credentials used by integration tests:
 
@@ -176,6 +285,8 @@ Adjust iterations and warmup with:
 ```bash
 AZUREFETCH_BENCHMARK_ITERATIONS=10 \
 AZUREFETCH_BENCHMARK_WARMUP=2 \
+AZUREFETCH_BENCHMARK_BATCH_SIZE=5 \
+AZUREFETCH_BENCHMARK_DRIVER=native \
 bun run bench:storage
 ```
 

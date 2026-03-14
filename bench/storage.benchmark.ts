@@ -1,26 +1,13 @@
-import { BlobServiceClient, DefaultAzureCredential, TableClient, TableServiceClient } from "../src";
+import { nativeBenchmarkDriver, sdkBenchmarkDriver } from "./drivers";
+import type { BenchmarkMode, BenchmarkStats, StorageBenchmarkDriver, TestConfig } from "./types";
+
+type BenchmarkConfig = {
+  mode: BenchmarkMode & { batchSize: number };
+  selectedDrivers: ReadonlyArray<StorageBenchmarkDriver>;
+};
 
 const requiredEnvVar = "AZUREFETCH_RUN_STORAGE_BENCHMARK";
 const runBenchmark = process.env[requiredEnvVar] === "1";
-
-type TestConfig =
-  | {
-      kind: "connection-string";
-      connectionString: string;
-    }
-  | {
-      kind: "service-principal";
-      blobEndpoint: string;
-      tableEndpoint: string;
-    };
-
-type BenchmarkStats = Map<string, number[]>;
-
-type BenchmarkMode = {
-  testConfig: TestConfig;
-  iterations: number;
-  warmup: number;
-};
 
 const storageConnectionString = process.env.AZUREFETCH_STORAGE_CONNECTION_STRING;
 const storageAuthMode = process.env.AZUREFETCH_STORAGE_AUTH_MODE;
@@ -31,10 +18,24 @@ const clientId = process.env.AZURE_CLIENT_ID;
 const clientSecret = process.env.AZURE_CLIENT_SECRET;
 const blobEndpointFromEnv = process.env.AZUREFETCH_STORAGE_BLOB_ENDPOINT;
 const tableEndpointFromEnv = process.env.AZUREFETCH_STORAGE_TABLE_ENDPOINT;
-const iterations = Number.parseInt(process.env.AZUREFETCH_BENCHMARK_ITERATIONS || "5", 10);
-const warmup = Number.parseInt(process.env.AZUREFETCH_BENCHMARK_WARMUP || "1", 10);
+const batchSizeFromEnv = process.env.AZUREFETCH_BENCHMARK_BATCH_SIZE;
+const iterationsFromEnv = process.env.AZUREFETCH_BENCHMARK_ITERATIONS;
+const warmupFromEnv = process.env.AZUREFETCH_BENCHMARK_WARMUP;
 
-function parseConfig(): TestConfig | undefined {
+const includeDetailedPercentiles =
+  process.argv.includes("--detailed") || process.env.AZUREFETCH_BENCHMARK_DETAILED === "1";
+const driverSelection = (process.env.AZUREFETCH_BENCHMARK_DRIVER ?? "both").toLowerCase();
+
+function parseInteger(value: string | undefined, fallback: number, minimum: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (Number.isNaN(parsed)) {
+    return fallback;
+  }
+
+  return parsed >= minimum ? parsed : minimum;
+}
+
+function parseTestConfig(): TestConfig | undefined {
   const normalizedStorageConnectionString =
     storageConnectionString === "UseDevelopmentStorage=true"
       ? "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
@@ -70,6 +71,32 @@ function parseConfig(): TestConfig | undefined {
   return servicePrincipalConfig;
 }
 
+function parseBenchmarkDrivers(): StorageBenchmarkDriver[] {
+  const allDrivers = {
+    native: nativeBenchmarkDriver,
+    sdk: sdkBenchmarkDriver,
+  } as const;
+
+  if (driverSelection === "native") {
+    return [allDrivers.native];
+  }
+
+  if (driverSelection === "sdk") {
+    return [allDrivers.sdk];
+  }
+
+  if (driverSelection !== "both") {
+    const allowed = Object.keys(allDrivers).join(", ");
+    console.error(`Unsupported AZUREFETCH_BENCHMARK_DRIVER value: ${driverSelection}`);
+    console.error(`Supported values are: both, native, sdk.`);
+    console.error(`Default is both.`);
+    console.error(`To use a single driver, set AZUREFETCH_BENCHMARK_DRIVER to ${allowed}.`);
+    process.exit(1);
+  }
+
+  return [allDrivers.native, allDrivers.sdk];
+}
+
 function randomToken(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -83,9 +110,23 @@ function toPercentile(values: number[], percentile: number): number {
     return Number.NaN;
   }
 
-  const sorted = values.toSorted((a, b) => a - b);
+  const sorted = values.toSorted((left, right) => left - right);
   const index = Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * percentile));
+
   return sorted[index] ?? 0;
+}
+
+const summaryColumns = {
+  operationWidth: 40,
+  timeWidth: 12,
+} as const;
+
+function formatOperationLabel(label: string): string {
+  return label.padEnd(summaryColumns.operationWidth);
+}
+
+function formatSummaryTime(value: number): string {
+  return formatMs(value).padStart(summaryColumns.timeWidth);
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -108,113 +149,93 @@ async function waitUntil(predicate: () => Promise<boolean>, attempts: number, de
   return false;
 }
 
-async function measure<T>(stats: BenchmarkStats, label: string, fn: () => Promise<T>, shouldRecord = true): Promise<T> {
+async function measure<T>(
+  stats: BenchmarkStats,
+  operationLabel: string,
+  fn: () => Promise<T>,
+  shouldRecord = true,
+): Promise<T> {
   const start = performance.now();
   const result = await fn();
   const elapsed = performance.now() - start;
-  if (!shouldRecord) {
-    return result;
-  }
 
-  const samples = stats.get(label);
-  if (samples == null) {
-    stats.set(label, [elapsed]);
-  } else {
-    samples.push(elapsed);
+  if (shouldRecord) {
+    const samples = stats.get(operationLabel);
+    if (samples == null) {
+      stats.set(operationLabel, [elapsed]);
+    } else {
+      samples.push(elapsed);
+    }
   }
 
   return result;
 }
 
-async function listContainerNames(blobService: BlobServiceClient): Promise<string[]> {
-  const names: string[] = [];
-  for await (const page of blobService.listContainers().byPage({ maxPageSize: 100 })) {
-    names.push(...page.segment.containerItems.map((container) => container.name));
-  }
-  return names;
-}
-
-async function listBlobNames(containerName: string, blobService: BlobServiceClient): Promise<string[]> {
-  const container = blobService.getContainerClient(containerName);
-  const names: string[] = [];
-
-  for await (const page of container.listBlobsFlat().byPage({ maxPageSize: 100 })) {
-    names.push(...page.segment.blobItems.map((blob) => blob.name));
-  }
-
-  return names;
-}
-
 function generatePayload(length: number): string {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   let text = "";
+
   while (text.length < length) {
-    text += alphabet[Math.floor(Math.random() * alphabet.length)];
+    text += alphabet[Math.floor(Math.random() * alphabet.length)]!;
   }
 
   return text.slice(0, length);
 }
 
-async function listRowKeys(tableClient: TableClient): Promise<string[]> {
-  const rows: string[] = [];
-  for await (const page of tableClient.list().byPage({ maxPageSize: 10 })) {
-    rows.push(...page.value.map((entity) => String(entity.rowKey)));
-  }
-
-  return rows;
-}
-
 async function runBlobBenchmark(
   stats: BenchmarkStats,
-  blobService: BlobServiceClient,
+  mode: BenchmarkMode,
+  driver: StorageBenchmarkDriver,
   runIndex: number,
-  record: boolean,
+  shouldRecord: boolean,
 ): Promise<void> {
   const suffix = randomToken().replace(/-/g, "");
-  const containerName = `azbenchblob-${runIndex}-${suffix}`.slice(0, 50);
+  const service = await driver.createBlobService(mode.testConfig);
+
+  const containerName = `azbenchblob-${driver.id}-${runIndex}-${suffix}`.slice(0, 50);
   const blobName = `payload-${runIndex}.txt`;
-  const container = blobService.getContainerClient(containerName);
-  const blob = container.getBlockBlobClient(blobName);
   const payload = generatePayload(1024);
 
   try {
     const createResponse = await measure(
       stats,
-      "blob.create-container",
-      async () => {
-        return container.createIfNotExists();
-      },
-      record,
+      `${driver.id}.blob.create-container`,
+      () => service.createContainer(containerName),
+      shouldRecord,
     );
+
     if (!createResponse.succeeded && createResponse.errorCode !== "ContainerAlreadyExists") {
       throw new Error(`container create failed: ${JSON.stringify(createResponse)}`);
     }
 
     await measure(
       stats,
-      "blob.upload",
-      async () => {
-        await blob.upload(payload, payload.length);
-      },
-      record,
+      `${driver.id}.blob.upload`,
+      () => service.uploadBlob(containerName, blobName, payload),
+      shouldRecord,
     );
 
-    await measure(
+    const text = await measure(
       stats,
-      "blob.download",
+      `${driver.id}.blob.download`,
       async () => {
-        const response = await blob.download(0, payload.length);
-        const read = await response.text();
-        if (read !== payload) {
+        const downloaded = await service.downloadBlob(containerName, blobName, payload.length);
+        if (downloaded !== payload) {
           throw new Error("blob content mismatch");
         }
+
+        return downloaded;
       },
-      record,
+      shouldRecord,
     );
+
+    if (!shouldRecord) {
+      void text;
+    }
 
     const containsContainer = await waitUntil(
       async () => {
-        const names = await listContainerNames(blobService);
+        const names = await service.listContainerNames();
         return names.includes(containerName);
       },
       5,
@@ -225,23 +246,23 @@ async function runBlobBenchmark(
       throw new Error("created container not observed in service list");
     }
 
-    if (record) {
+    if (shouldRecord) {
       await measure(
         stats,
-        "blob.list-containers",
+        `${driver.id}.blob.list-containers`,
         async () => {
-          const names = await listContainerNames(blobService);
+          const names = await service.listContainerNames();
           if (!names.includes(containerName)) {
             throw new Error("container name not found in listing");
           }
         },
-        record,
+        true,
       );
     }
 
     const containsBlob = await waitUntil(
       async () => {
-        const names = await listBlobNames(containerName, blobService);
+        const names = await service.listBlobNames(containerName);
         return names.includes(blobName);
       },
       5,
@@ -252,64 +273,59 @@ async function runBlobBenchmark(
       throw new Error("created blob not observed in container list");
     }
 
-    if (record) {
+    if (shouldRecord) {
       await measure(
         stats,
-        "blob.list-blobs",
+        `${driver.id}.blob.list-blobs`,
         async () => {
-          const names = await listBlobNames(containerName, blobService);
+          const names = await service.listBlobNames(containerName);
           if (!names.includes(blobName)) {
             throw new Error("blob name not found in container listing");
           }
         },
-        record,
+        true,
       );
     }
 
     const deleteResponse = await measure(
       stats,
-      "blob.delete-blob",
-      async () => {
-        return blob.deleteIfExists();
-      },
-      record,
+      `${driver.id}.blob.delete-blob`,
+      () => service.deleteBlob(containerName, blobName),
+      shouldRecord,
     );
-
     if (!deleteResponse.succeeded && deleteResponse.errorCode !== "BlobNotFound") {
       throw new Error(`blob delete failed: ${JSON.stringify(deleteResponse)}`);
     }
   } finally {
-    if (record) {
-      await measure(stats, "blob.delete-container", async () => {
-        await container.deleteIfExists();
-      });
-    } else {
-      await container.deleteIfExists();
-    }
+    await measure(
+      stats,
+      `${driver.id}.blob.delete-container`,
+      () => service.deleteContainer(containerName),
+      shouldRecord,
+    );
   }
 }
 
 async function runTableBenchmark(
   stats: BenchmarkStats,
-  tableService: TableServiceClient,
+  mode: BenchmarkMode,
+  driver: StorageBenchmarkDriver,
   runIndex: number,
-  record: boolean,
+  shouldRecord: boolean,
 ): Promise<void> {
+  const service = await driver.createTableService(mode.testConfig);
   const suffix = randomToken().replace(/-/g, "");
-  const tableName = `azbenchtable${runIndex}${suffix}`.slice(0, 48);
+  const tableName = `azbenchtable${driver.id}${runIndex}${suffix}`.slice(0, 48);
   const partitionKey = `pk${runIndex}`;
   const rowKey = `rk${runIndex}`;
   const payload = `payload-${runIndex}-${randomToken()}`;
-  const tableClient = tableService.getTableClient(tableName);
 
   try {
     const createResponse = await measure(
       stats,
-      "table.create-table",
-      async () => {
-        return tableService.createTableIfNotExists(tableName);
-      },
-      record,
+      `${driver.id}.table.create-table`,
+      () => service.createTable(tableName),
+      shouldRecord,
     );
 
     if (!createResponse.succeeded && createResponse.errorCode !== "TableAlreadyExists") {
@@ -318,62 +334,118 @@ async function runTableBenchmark(
 
     await measure(
       stats,
-      "table.upsert-entity",
-      async () => {
-        await tableClient.upsertEntity({
-          partitionKey,
-          rowKey,
-          value: payload,
-        });
-      },
-      record,
+      `${driver.id}.table.upsert-entity`,
+      () => service.upsertEntity(tableName, partitionKey, rowKey, payload),
+      shouldRecord,
     );
 
     await measure(
       stats,
-      "table.get-entity",
+      `${driver.id}.table.get-entity`,
       async () => {
-        const entity = await tableClient.getEntity(partitionKey, rowKey);
-        if (entity == null || entity.value !== payload) {
-          throw new Error("entity mismatch for table upsert/read");
+        const entityValue = await service.getEntityValue(tableName, partitionKey, rowKey);
+        if (entityValue !== payload) {
+          throw new Error("entity payload mismatch for table get");
         }
       },
-      record,
+      shouldRecord,
     );
 
-    if (record) {
+    if (shouldRecord) {
       await measure(
         stats,
-        "table.list-entities",
+        `${driver.id}.table.list-entities`,
         async () => {
-          const rows = await listRowKeys(tableClient);
-          if (!rows.includes(rowKey)) {
+          const observed = await waitUntil(
+            async () => {
+              const rows = await service.listRowKeys(tableName);
+              return rows.includes(rowKey);
+            },
+            5,
+            250,
+          );
+
+          if (!observed) {
             throw new Error("inserted row not found in entity listing");
           }
         },
-        record,
+        true,
       );
+    }
+
+    const deleteResponse = await measure(
+      stats,
+      `${driver.id}.table.delete-entity`,
+      () => service.deleteEntity(tableName, partitionKey, rowKey),
+      shouldRecord,
+    );
+    if (!deleteResponse.succeeded && deleteResponse.errorCode !== "ResourceNotFound") {
+      throw new Error(`table entity delete failed: ${JSON.stringify(deleteResponse)}`);
+    }
+  } finally {
+    await measure(stats, `${driver.id}.table.delete-table`, () => service.deleteTable(tableName), shouldRecord);
+  }
+}
+
+async function runBlobBatchBenchmark(
+  stats: BenchmarkStats,
+  mode: BenchmarkMode,
+  driver: StorageBenchmarkDriver,
+  runIndex: number,
+  shouldRecord: boolean,
+): Promise<void> {
+  if (mode.batchSize <= 0) {
+    return;
+  }
+
+  const service = await driver.createBlobService(mode.testConfig);
+  const suffix = randomToken().replace(/-/g, "");
+  const containerName = `azbenchbatch-${driver.id}-${runIndex}-${suffix}`.slice(0, 50);
+  const blobNames = Array.from({ length: mode.batchSize }, (_, index) => `batch-${index}.txt`);
+  const payload = generatePayload(1024);
+
+  try {
+    const createResponse = await measure(
+      stats,
+      `${driver.id}.blob.batch-create-container`,
+      () => service.createContainer(containerName),
+      shouldRecord,
+    );
+
+    if (!createResponse.succeeded && createResponse.errorCode !== "ContainerAlreadyExists") {
+      throw new Error(`batch container create failed: ${JSON.stringify(createResponse)}`);
     }
 
     await measure(
       stats,
-      "table.delete-entity",
-      async () => {
-        const response = await tableClient.deleteEntity(partitionKey, rowKey);
-        if (!response.succeeded) {
-          throw new Error(`delete entity failed: ${JSON.stringify(response)}`);
-        }
-      },
-      record,
+      `${driver.id}.blob.batch-upload`,
+      () => service.uploadBatchBlobs(containerName, blobNames, payload),
+      shouldRecord,
     );
-  } finally {
-    if (record) {
-      await measure(stats, "table.delete-table", async () => {
-        await tableService.deleteTableIfExists(tableName);
-      });
-    } else {
-      await tableService.deleteTableIfExists(tableName);
+
+    const removeResponse = await measure(
+      stats,
+      `${driver.id}.blob.batch-delete`,
+      () => service.deleteBlobBatch(containerName, blobNames),
+      shouldRecord,
+    );
+
+    if (removeResponse.status < 200 || removeResponse.status >= 300) {
+      throw new Error(`batch delete failed with status ${removeResponse.status}`);
     }
+
+    if (removeResponse.succeededCount + removeResponse.failedCount !== mode.batchSize) {
+      throw new Error(
+        `batch delete mismatch: expected ${mode.batchSize}, got succeeded=${removeResponse.succeededCount}, failed=${removeResponse.failedCount}`,
+      );
+    }
+  } finally {
+    await measure(
+      stats,
+      `${driver.id}.blob.batch-delete-container`,
+      () => service.deleteContainer(containerName),
+      shouldRecord,
+    );
   }
 }
 
@@ -381,24 +453,49 @@ function printSummary(stats: BenchmarkStats, durationMs: number): void {
   console.log("\nStorage benchmark summary");
   console.log(`Wall clock: ${formatMs(durationMs)}`);
 
-  const labels = [...stats.keys()].sort();
+  const header =
+    `Operation`.padEnd(summaryColumns.operationWidth) +
+    `avg`.padStart(summaryColumns.timeWidth + 1) +
+    (includeDetailedPercentiles
+      ? `p50`.padStart(summaryColumns.timeWidth + 1) +
+        `p95`.padStart(summaryColumns.timeWidth + 1) +
+        `p99`.padStart(summaryColumns.timeWidth + 1) +
+        `min`.padStart(summaryColumns.timeWidth + 1) +
+        `max`.padStart(summaryColumns.timeWidth + 1)
+      : `min`.padStart(summaryColumns.timeWidth + 1) + `max`.padStart(summaryColumns.timeWidth + 1));
+
+  console.log(header);
+
+  const labels = [...stats.keys()].sort((left, right) => left.localeCompare(right));
+
   for (const label of labels) {
     const samples = stats.get(label);
     if (samples == null || samples.length === 0) {
       continue;
     }
 
-    const values = samples.toSorted((a, b) => a - b);
+    const values = samples.toSorted((left, right) => left - right);
     const count = values.length;
     const average = values.reduce((sum, value) => sum + value, 0) / count;
     const minimum = values[0] ?? 0;
     const maximum = values[values.length - 1] ?? 0;
+
+    if (!includeDetailedPercentiles) {
+      console.log(
+        `${formatOperationLabel(label)} ${formatSummaryTime(average)} ${formatSummaryTime(minimum)} ${formatSummaryTime(maximum)}`,
+      );
+
+      continue;
+    }
+
     const p50 = toPercentile(values, 0.5);
     const p95 = toPercentile(values, 0.95);
     const p99 = toPercentile(values, 0.99);
 
     console.log(
-      `${label.padEnd(22)} count=${String(count).padStart(3)} avg=${formatMs(average)} p50=${formatMs(p50)} p95=${formatMs(p95)} p99=${formatMs(p99)} min=${formatMs(minimum)} max=${formatMs(maximum)}`,
+      `${formatOperationLabel(label)} ${formatSummaryTime(average)} ${formatSummaryTime(
+        p50,
+      )} ${formatSummaryTime(p95)} ${formatSummaryTime(p99)} ${formatSummaryTime(minimum)} ${formatSummaryTime(maximum)}`,
     );
   }
 }
@@ -411,44 +508,43 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const resolvedMode: BenchmarkMode = {
-    testConfig: parseConfig(),
-    iterations: Number.isNaN(iterations) || iterations <= 0 ? 5 : iterations,
-    warmup: Number.isNaN(warmup) || warmup < 0 ? 1 : warmup,
+  const selectedDrivers = parseBenchmarkDrivers();
+  const mode: BenchmarkConfig["mode"] = {
+    testConfig: parseTestConfig(),
+    iterations: parseInteger(iterationsFromEnv, 5, 1),
+    warmup: parseInteger(warmupFromEnv, 1, 0),
+    batchSize: parseInteger(batchSizeFromEnv, 50, 1),
   };
 
-  if (resolvedMode.testConfig == null) {
+  if (mode.testConfig == null) {
     console.error("No storage benchmark configuration available.");
     console.error("Set AZUREFETCH_STORAGE_CONNECTION_STRING for shared-key or set account+service-principal vars.");
     process.exit(1);
   }
 
-  const credential = new DefaultAzureCredential();
+  const config: BenchmarkConfig = {
+    mode,
+    selectedDrivers,
+  };
 
-  const blobService =
-    resolvedMode.testConfig.kind === "connection-string"
-      ? BlobServiceClient.fromConnectionString(resolvedMode.testConfig.connectionString)
-      : new BlobServiceClient(resolvedMode.testConfig.blobEndpoint, credential);
-
-  const tableService =
-    resolvedMode.testConfig.kind === "connection-string"
-      ? TableServiceClient.fromConnectionString(resolvedMode.testConfig.connectionString)
-      : new TableServiceClient(resolvedMode.testConfig.tableEndpoint, credential);
-
-  console.log(`Running storage benchmark (${resolvedMode.iterations} iterations + ${resolvedMode.warmup} warmup).`);
-  console.log(`Mode: ${resolvedMode.testConfig.kind}`);
+  const requestedDrivers = config.selectedDrivers.map((driver) => driver.id).join(", ");
+  console.log(
+    `Running storage benchmark (${config.mode.iterations} iterations + ${config.mode.warmup} warmup) across ${requestedDrivers}.`,
+  );
+  console.log(`Mode: ${config.mode.testConfig.kind}`);
+  console.log(`Batch size: ${config.mode.batchSize}`);
 
   const stats: BenchmarkStats = new Map();
   const start = performance.now();
 
-  for (let index = 0; index < resolvedMode.iterations + resolvedMode.warmup; index += 1) {
-    const shouldRecord = index >= resolvedMode.warmup;
+  for (let index = 0; index < config.mode.iterations + config.mode.warmup; index += 1) {
+    const shouldRecord = index >= config.mode.warmup;
     const runId = index + 1;
-
-    console.log(`Run ${runId} ${shouldRecord ? "[recording]" : "[warmup]"}`);
-
-    await runBlobBenchmark(stats, blobService, runId, shouldRecord);
-    await runTableBenchmark(stats, tableService, runId, shouldRecord);
+    for (const driver of config.selectedDrivers) {
+      await runBlobBenchmark(stats, config.mode, driver, runId, shouldRecord);
+      await runTableBenchmark(stats, config.mode, driver, runId, shouldRecord);
+      await runBlobBatchBenchmark(stats, config.mode, driver, runId, shouldRecord);
+    }
   }
 
   printSummary(stats, performance.now() - start);

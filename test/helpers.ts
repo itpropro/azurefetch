@@ -7,7 +7,7 @@ export type FetchHandler = (url: string, init: RequestInit) => Response | Promis
 export function createFetchMock(handlers: FetchHandler[]): FetchMock {
   let call = 0;
 
-  return vi.fn(async (url: string, init: RequestInit = {}) => {
+  return vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const handler = handlers[call];
     call += 1;
 
@@ -15,8 +15,40 @@ export function createFetchMock(handlers: FetchHandler[]): FetchMock {
       throw new Error(`Unexpected fetch call ${call}`);
     }
 
-    return Promise.resolve(handler(String(url), init));
+    const normalizedUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+    const normalizedInit: RequestInit =
+      input instanceof Request
+        ? {
+            ...(await normalizeRequestInit(input)),
+            ...init,
+          }
+        : init;
+
+    return Promise.resolve(handler(normalizedUrl, normalizedInit));
   }) as FetchMock;
+}
+
+async function normalizeRequestInit(request: Request): Promise<RequestInit> {
+  let body = request.body;
+  if (body != null && !request.bodyUsed) {
+    const cloned = request.clone();
+    body = await cloned.text();
+  }
+
+  return {
+    method: request.method,
+    headers: request.headers,
+    body,
+    cache: request.cache,
+    credentials: request.credentials,
+    integrity: request.integrity,
+    mode: request.mode,
+    redirect: request.redirect,
+    referrer: request.referrer,
+    referrerPolicy: request.referrerPolicy,
+    signal: request.signal,
+  };
 }
 
 export function textResponse(body: string, status = 200, statusText = "OK", headers: HeadersInit = {}): Response {

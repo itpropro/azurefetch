@@ -1,8 +1,17 @@
 import { DefaultAzureCredential, StorageSharedKeyCredential, getAccountNameFromUrl } from "./blob";
+import { storageOAuthScope } from "./internal/request-core";
+import {
+  addQueryParameters,
+  applyStorageDateAndVersionHeaders,
+  applyTableSharedKeyLiteAuth,
+  setKnownContentLength,
+  storageServiceVersion,
+} from "./internal/storage-request";
 
-const storageOAuthScope = "https://storage.azure.com/.default";
-const xmsServiceVersion = "2024-11-04";
+const xmsServiceVersion = storageServiceVersion;
 const odataVersions = "3.0;NetFx";
+// Azure Table service caps paged queries at 1,000 entities per request.
+const maxTablePageSize = 1000;
 
 interface TableClientOptions {
   fetch?: typeof globalThis.fetch;
@@ -16,6 +25,44 @@ interface TableOperationOptions {
   headers?: HeadersInit;
   body?: BodyInit | null;
   query?: Record<string, string>;
+}
+
+type TableTransactionActionType = "create" | "upsert" | "update" | "delete";
+
+interface TableTransactionBaseAction {
+  action: TableTransactionActionType;
+}
+
+export interface TableTransactionCreateAction extends TableTransactionBaseAction {
+  action: "create";
+  entity: TableEntity | Record<string, unknown>;
+}
+
+export interface TableTransactionDeleteAction extends TableTransactionBaseAction {
+  action: "delete";
+  partitionKey: string;
+  rowKey: string;
+}
+
+export interface TableTransactionUpdateAction extends TableTransactionBaseAction {
+  action: "update";
+  entity: TableEntity | Record<string, unknown>;
+}
+
+export interface TableTransactionUpsertAction extends TableTransactionBaseAction {
+  action: "upsert";
+  entity: TableEntity | Record<string, unknown>;
+}
+
+export type TableTransactionAction =
+  | TableTransactionCreateAction
+  | TableTransactionDeleteAction
+  | TableTransactionUpdateAction
+  | TableTransactionUpsertAction;
+
+export interface TableTransactionResponse {
+  status: number;
+  subResponses: Array<{ status: number }>;
 }
 
 interface ContinuationState {
@@ -151,20 +198,10 @@ export class TableServiceClient {
 
   public async request(method: string, inputUrl: string, options: TableOperationOptions = {}): Promise<Response> {
     const requestUrl = new URL(inputUrl);
-    if (options.query) {
-      for (const [name, value] of Object.entries(options.query)) {
-        requestUrl.searchParams.set(name, value);
-      }
-    }
+    addQueryParameters(requestUrl, options.query);
 
     const headers = new Headers(options.headers ?? {});
-    if (!headers.has("x-ms-date")) {
-      headers.set("x-ms-date", new Date().toUTCString());
-    }
-
-    if (!headers.has("x-ms-version")) {
-      headers.set("x-ms-version", xmsServiceVersion);
-    }
+    applyStorageDateAndVersionHeaders(headers, xmsServiceVersion);
 
     if (!headers.has("DataServiceVersion")) {
       headers.set("DataServiceVersion", odataVersions);
@@ -178,10 +215,7 @@ export class TableServiceClient {
       headers.set("Accept", "application/json;odata=nometadata");
     }
 
-    const contentLength = getKnownBodyLength(options.body);
-    if (contentLength != null) {
-      headers.set("Content-Length", String(contentLength));
-    }
+    setKnownContentLength(headers, options.body);
 
     if (this.credential instanceof DefaultAzureCredential) {
       headers.set("Authorization", await this.credential.getAuthorizationHeader(storageOAuthScope));
@@ -190,9 +224,13 @@ export class TableServiceClient {
         throw new Error("Unable to extract accountName from URL for shared key signing");
       }
 
-      const stringToSign = buildStringToSignForTable(this.accountName, requestUrl, headers);
-      const signature = await computeSharedKeyLiteSignature(this.credential.accountKey, stringToSign);
-      headers.set("Authorization", `SharedKeyLite ${this.accountName}:${signature}`);
+      headers.set(
+        "Authorization",
+        await applyTableSharedKeyLiteAuth(method, requestUrl, headers, {
+          accountName: this.accountName,
+          accountKey: this.credential.accountKey,
+        }),
+      );
     }
 
     return this.fetcher(requestUrl.toString(), {
@@ -341,6 +379,101 @@ export class TableClient {
     };
   }
 
+  public async submitTransaction(actions: TableTransactionAction[]): Promise<TableTransactionResponse> {
+    const subResponses: Array<{ status: number }> = [];
+
+    for (const action of actions) {
+      if (action.action === "create") {
+        const partitionKey = getPartitionKey(action.entity);
+        const rowKey = getRowKey(action.entity);
+        const payload = normalizeEntityPayload(action.entity, partitionKey, rowKey);
+
+        const response = await this.request("POST", this.url, {
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json;odata=nometadata",
+            Prefer: "return-no-content",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Table transaction create failed: ${response.status} ${response.statusText}`);
+        }
+
+        subResponses.push({ status: response.status });
+        continue;
+      }
+
+      if (action.action === "update" || action.action === "upsert") {
+        const partitionKey = getPartitionKey(action.entity);
+        const rowKey = getRowKey(action.entity);
+        const payload = normalizeEntityPayload(action.entity, partitionKey, rowKey);
+
+        const response = await this.request("PUT", entityUrl(this.url, partitionKey, rowKey), {
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json;odata=nometadata",
+            Prefer: "return-no-content",
+            "If-Match": "*",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (response.ok || response.status === 204) {
+          subResponses.push({ status: response.status });
+          continue;
+        }
+
+        if (action.action === "update") {
+          throw new Error(`Table transaction update failed: ${response.status} ${response.statusText}`);
+        }
+
+        if (response.status !== 404) {
+          throw new Error(`Table transaction upsert failed: ${response.status} ${response.statusText}`);
+        }
+
+        const insertResponse = await this.request("POST", this.url, {
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json;odata=nometadata",
+            Prefer: "return-no-content",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!insertResponse.ok && insertResponse.status !== 204) {
+          throw new Error(`Table transaction upsert failed: ${insertResponse.status} ${insertResponse.statusText}`);
+        }
+
+        subResponses.push({ status: insertResponse.status });
+        continue;
+      }
+
+      if (action.action === "delete") {
+        const response = await this.request("DELETE", entityUrl(this.url, action.partitionKey, action.rowKey), {
+          headers: {
+            "If-Match": "*",
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error(`Table transaction delete failed: ${response.status} ${response.statusText}`);
+        }
+
+        subResponses.push({ status: response.status });
+        continue;
+      }
+
+      throw new Error(`Unsupported table transaction action: ${action.action}`);
+    }
+
+    return {
+      status: actions.length > 0 ? 202 : 204,
+      subResponses,
+    };
+  }
+
   private async *listEntitiesByPage(options?: {
     continuationToken?: string;
     maxPageSize?: number;
@@ -351,7 +484,7 @@ export class TableClient {
     while (true) {
       const query: Record<string, string> = {};
       if (maxPageSize != null) {
-        query["$top"] = String(maxPageSize);
+        query["$top"] = String(Math.min(maxPageSize, maxTablePageSize));
       }
 
       const continuationState = parseContinuationToken(continuationToken);
@@ -502,34 +635,6 @@ function appendToURLPath(baseUrl: string, path: string): string {
   return url.toString().replace(/\/$/, "");
 }
 
-function buildStringToSignForTable(accountName: string, url: URL, headers: Headers): string {
-  const date = headers.get("x-ms-date") ?? headers.get("Date") ?? "";
-  const canonicalizedResource = buildTableCanonicalizedResource(url, accountName);
-  return `${date}\n${canonicalizedResource}`;
-}
-
-function buildTableCanonicalizedResource(url: URL, accountName: string): string {
-  const normalizedPath = url.pathname;
-  const canonicalizedResource = `/${accountName}${normalizedPath}`;
-  const comp = url.searchParams.get("comp");
-  if (comp == null) {
-    return canonicalizedResource;
-  }
-
-  return `${canonicalizedResource}?comp=${comp}`;
-}
-async function computeSharedKeyLiteSignature(accountKey: string, stringToSign: string): Promise<string> {
-  const subtle = globalThis.crypto?.subtle;
-  if (subtle == null) {
-    throw new Error("Web Crypto API is required for SharedKeyLite signing");
-  }
-
-  const keyBytes = decodeBase64ToBytes(accountKey);
-  const cryptoKey = await subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const signature = await subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(stringToSign));
-  return encodeBytesToBase64(signature);
-}
-
 function decodeBase64ToBytes(base64: string): Uint8Array {
   if (typeof globalThis.atob !== "function") {
     throw new Error("atob is required to decode shared key values");
@@ -543,44 +648,6 @@ function decodeBase64ToBytes(base64: string): Uint8Array {
   }
 
   return bytes;
-}
-
-function encodeBytesToBase64(bytes: ArrayBuffer | ArrayBufferView): string {
-  if (typeof globalThis.btoa !== "function") {
-    throw new Error("btoa is required to encode shared key signatures");
-  }
-
-  const signatureBytes = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  let binary = "";
-  for (const byte of signatureBytes) {
-    binary += String.fromCharCode(byte);
-  }
-
-  return globalThis.btoa(binary);
-}
-
-function getKnownBodyLength(body: BodyInit | null | undefined): number | undefined {
-  if (body == null) {
-    return undefined;
-  }
-
-  if (typeof body === "string") {
-    return new TextEncoder().encode(body).byteLength;
-  }
-
-  if (body instanceof ArrayBuffer) {
-    return body.byteLength;
-  }
-
-  if (ArrayBuffer.isView(body)) {
-    return body.byteLength;
-  }
-
-  if (body instanceof Blob) {
-    return body.size;
-  }
-
-  return undefined;
 }
 
 function entityUrl(serviceUrl: string, partitionKey: string, rowKey: string): string {

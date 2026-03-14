@@ -2,7 +2,7 @@
   "name": "azurefetch",
   "version": "0.0.1",
   "private": true,
-  "description": "Minimal Azure token helpers for modern runtimes",
+  "description": "Minimal dependency-free Azure fetch utilities",
   "license": "MIT",
   "files": [
     "dist"
@@ -35,6 +35,9 @@
     "check": "oxfmt --check && oxlint . && oxlint . --type-aware && vitest run && obuild"
   },
   "devDependencies": {
+    "@azure/data-tables": "13.3.2",
+    "@azure/identity": "4.13.0",
+    "@azure/storage-blob": "12.31.0",
     "@commitlint/cli": "^20.4.4",
     "@commitlint/config-conventional": "^20.4.4",
     "@types/node": "^24.0.0",

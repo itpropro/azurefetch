@@ -1,11 +1,14 @@
 import { createHmac } from "node:crypto";
 
-import { getDefaultAzureCredentialToken } from "./default-credential";
-import { createTokenProvider } from "./provider";
-import type { AccessToken, TokenProvider } from "./types";
-
-const storageOAuthScope = "https://storage.azure.com/.default";
-const xmsServiceVersion = "2024-11-04";
+import { DefaultAzureCredential } from "./default-azure-credential";
+import { storageOAuthScope } from "./internal/request-core";
+import {
+  applyBlobSharedKeyAuth,
+  addQueryParameters,
+  applyStorageDateAndVersionHeaders,
+  setKnownContentLength,
+  storageServiceVersion,
+} from "./internal/storage-request";
 
 interface BlobClientOptions {
   fetch?: typeof globalThis.fetch;
@@ -44,6 +47,43 @@ export interface BlobGetPropertiesResponse {
   metadata: Record<string, string>;
 }
 
+const batchMaxRequestCount = 256;
+const multipartLineEnding = "\r\n";
+const xmsServiceVersion = storageServiceVersion;
+// Azure Blob service pages at most 5,000 items for list operations.
+const maxBlobPageSize = 5000;
+
+export interface BlobBatchSubResponse {
+  status: number;
+  statusMessage?: string;
+  headers?: Record<string, string>;
+  bodyAsText?: string;
+  errorCode?: string;
+  _request?: BlobBatchSubRequest;
+}
+
+export interface BlobBatchSubmitResponse {
+  status: number;
+  subResponses: Array<BlobBatchSubResponse | undefined>;
+  subResponsesSucceededCount: number;
+  subResponsesFailedCount: number;
+  contentType?: string;
+  requestId?: string;
+  errorCode?: string;
+}
+
+export interface BlobBatchDeleteBlobOptions {
+  deleteSnapshots?: "include" | "only";
+}
+
+interface BlobBatchSubRequest {
+  method: string;
+  uri: string;
+  url: string;
+  credential?: CredentialLike;
+  headers: Record<string, string>;
+}
+
 export interface ContainerItem {
   name: string;
 }
@@ -65,47 +105,7 @@ export interface ContainerCreateIfNotExistsResponse {
   succeeded: boolean;
 }
 
-export class DefaultAzureCredential {
-  private readonly providers = new Map<string, TokenProvider>();
-
-  constructor(private readonly options: DefaultAzureCredentialOptions = {}) {}
-
-  private getTokenProvider(scopes: string[]): TokenProvider {
-    const cacheKey = JSON.stringify(scopes);
-    const existingProvider = this.providers.get(cacheKey);
-    if (existingProvider != null) {
-      return existingProvider;
-    }
-
-    const provider = createTokenProvider({
-      loadToken: () =>
-        getDefaultAzureCredentialToken({
-          scope: scopes,
-          fetch: this.options.fetch,
-          authorityHost: this.options.authorityHost,
-        }),
-    });
-
-    this.providers.set(cacheKey, provider);
-    return provider;
-  }
-
-  public async getToken(scopes: string | string[]): Promise<AccessToken> {
-    const normalizedScopes = normalizeScopes(scopes);
-    const provider = this.getTokenProvider(normalizedScopes);
-    return provider.getToken();
-  }
-
-  public async getAuthorizationHeader(scopes: string | string[] = storageOAuthScope): Promise<string> {
-    const token = await this.getToken(scopes);
-    return `${token.tokenType} ${token.token}`;
-  }
-}
-
-interface DefaultAzureCredentialOptions {
-  authorityHost?: string;
-  fetch?: typeof globalThis.fetch;
-}
+export { DefaultAzureCredential } from "./default-azure-credential";
 
 export class StorageSharedKeyCredential {
   public readonly accountKey: string;
@@ -297,6 +297,10 @@ export class BlobServiceClient {
     return new ContainerClient(containerUrl, this.credential, this.fetcher);
   }
 
+  public getBlobBatchClient(): BlobBatchClient {
+    return new BlobBatchClient(this.url, this.credential, this.fetcher);
+  }
+
   public listContainers(): {
     byPage: (options?: QueryOptions) => AsyncIterable<ListContainersSegment>;
   } {
@@ -337,22 +341,11 @@ export class BlobServiceClient {
     options: BlobOperationOptions & { query?: Record<string, string> } = {},
   ): Promise<Response> {
     const url = new URL(inputUrl);
-    if (options.query) {
-      for (const [name, value] of Object.entries(options.query)) {
-        url.searchParams.set(name, value);
-      }
-    }
+    addQueryParameters(url, options.query);
 
     const headers = new Headers(options.headers ?? {});
-    const bodyLength = getKnownBodyLength(options.body);
-
-    if (!headers.has("x-ms-date")) {
-      headers.set("x-ms-date", new Date().toUTCString());
-    }
-
-    if (!headers.has("x-ms-version")) {
-      headers.set("x-ms-version", xmsServiceVersion);
-    }
+    applyStorageDateAndVersionHeaders(headers);
+    setKnownContentLength(headers, options.body);
 
     if (this.credential instanceof DefaultAzureCredential) {
       const authHeader = await this.credential.getAuthorizationHeader(storageOAuthScope);
@@ -362,13 +355,7 @@ export class BlobServiceClient {
         throw new Error("Unable to extract accountName from URL for shared key signing");
       }
 
-      if (bodyLength != null) {
-        headers.set("Content-Length", String(bodyLength));
-      }
-
-      const stringToSign = buildStringToSign(method, url, headers, this.accountName);
-      const signature = this.credential.computeHMACSHA256(stringToSign);
-      headers.set("Authorization", `SharedKey ${this.accountName}:${signature}`);
+      headers.set("Authorization", applyBlobSharedKeyAuth(method, url, headers, this.credential));
     }
 
     const response = await this.fetcher(url.toString(), {
@@ -388,7 +375,7 @@ export class BlobServiceClient {
       const response = await this.request("GET", this.url, {
         query: {
           comp: "list",
-          ...(maxPageSize != null ? { maxresults: String(maxPageSize) } : undefined),
+          ...(maxPageSize != null ? { maxresults: String(Math.min(maxPageSize, maxBlobPageSize)) } : undefined),
           ...(continuationToken != null ? { marker: continuationToken } : undefined),
         },
       });
@@ -428,6 +415,10 @@ export class ContainerClient {
   public getBlockBlobClient(blobName: string): BlockBlobClient {
     const blobUrl = appendToURLPath(this.url, encodeBlobName(blobName));
     return new BlockBlobClient(blobUrl, this.credential, this.fetcher);
+  }
+
+  public getBlobBatchClient(): BlobBatchClient {
+    return new BlobBatchClient(this.url, this.credential, this.fetcher);
   }
 
   public async createIfNotExists(): Promise<ContainerCreateIfNotExistsResponse> {
@@ -495,7 +486,7 @@ export class ContainerClient {
         query: {
           comp: "list",
           restype: "container",
-          ...(maxPageSize != null ? { maxresults: String(maxPageSize) } : undefined),
+          ...(maxPageSize != null ? { maxresults: String(Math.min(maxPageSize, maxBlobPageSize)) } : undefined),
           ...(continuationToken != null ? { marker: continuationToken } : undefined),
         },
       });
@@ -530,14 +521,146 @@ export class ContainerClient {
     options: { query?: Record<string, string> } = {},
   ): Promise<Response> {
     const url = new URL(targetUrl);
-    if (options.query) {
-      for (const [key, value] of Object.entries(options.query)) {
-        url.searchParams.set(key, value);
-      }
-    }
+    addQueryParameters(url, options.query);
 
     const service = new BlobServiceClientProxy(this.url, this.credential, this.fetcher);
     return service.request(method, url.toString());
+  }
+}
+
+export class BlobBatch {
+  private readonly batchBoundary: string;
+  private readonly multipartContentType: string;
+  private readonly batchRequestEnding: string;
+  private readonly subRequests: Map<number, BlobBatchSubRequest>;
+  private readonly defaultCredential?: CredentialLike;
+
+  constructor(defaultCredential?: CredentialLike) {
+    this.batchBoundary = createBatchBoundary();
+    this.multipartContentType = `multipart/mixed; boundary=${this.batchBoundary}`;
+    this.batchRequestEnding = `--${this.batchBoundary}--${multipartLineEnding}`;
+    this.subRequests = new Map();
+    this.defaultCredential = defaultCredential;
+  }
+
+  public getMultiPartContentType(): string {
+    return this.multipartContentType;
+  }
+
+  public getHttpRequestBody(): string {
+    const parts: string[] = [];
+
+    for (const [operationIndex, subRequest] of this.subRequests) {
+      parts.push(this.getSubRequestHeader(operationIndex));
+      parts.push(`${subRequest.method} ${subRequest.uri} HTTP/1.1`);
+
+      for (const [name, value] of Object.entries(subRequest.headers)) {
+        if (value.length > 0) {
+          parts.push(`${name}: ${value}`);
+        }
+      }
+
+      parts.push("");
+      parts.push("");
+    }
+
+    return `${parts.join(multipartLineEnding)}${multipartLineEnding}${this.batchRequestEnding}`;
+  }
+
+  public getSubRequests(): Map<number, BlobBatchSubRequest> {
+    return this.subRequests;
+  }
+
+  public async deleteBlob(
+    blobUrl: string,
+    _credential: CredentialLike,
+    options?: BlobBatchDeleteBlobOptions,
+  ): Promise<void> {
+    if (this.subRequests.size >= batchMaxRequestCount) {
+      throw new RangeError(`Cannot exceed ${batchMaxRequestCount} sub requests in a single batch`);
+    }
+
+    const uri = extractBlobUri(blobUrl);
+    const headers: Record<string, string> = {};
+
+    if (options?.deleteSnapshots != null) {
+      headers["x-ms-delete-snapshots"] = options.deleteSnapshots;
+    }
+
+    const requestCredential = _credential ?? this.defaultCredential;
+    await addAuthenticationHeadersForSubRequest("DELETE", blobUrl, headers, requestCredential);
+
+    const operationIndex = this.subRequests.size;
+    this.subRequests.set(operationIndex, {
+      method: "DELETE",
+      uri,
+      url: blobUrl,
+      credential: requestCredential,
+      headers,
+    });
+  }
+
+  private getSubRequestHeader(operationId: number): string {
+    return [
+      `--${this.batchBoundary}`,
+      "Content-Type: application/http",
+      "Content-Transfer-Encoding: binary",
+      `Content-ID: ${operationId}`,
+      "",
+    ].join(multipartLineEnding);
+  }
+}
+
+export class BlobBatchClient {
+  private readonly serviceUrl: string;
+
+  constructor(
+    private readonly url: string,
+    private readonly credential: CredentialLike,
+    private readonly fetcher: typeof globalThis.fetch,
+  ) {
+    this.serviceUrl = validateUrl(url);
+  }
+
+  public createBatch(): BlobBatch {
+    return new BlobBatch(this.credential);
+  }
+
+  public async submitBatch(batch: BlobBatch, _options: BlobOperationOptions = {}): Promise<BlobBatchSubmitResponse> {
+    if (batch.getSubRequests().size === 0) {
+      throw new RangeError("Batch request should contain one or more sub requests.");
+    }
+
+    const batchUrl = new URL(this.serviceUrl);
+    batchUrl.searchParams.set("comp", "batch");
+
+    const response = await new BlobServiceClientProxy(this.serviceUrl, this.credential, this.fetcher).request(
+      "POST",
+      batchUrl,
+      {
+        headers: {
+          "Content-Type": batch.getMultiPartContentType(),
+        },
+        body: batch.getHttpRequestBody(),
+      },
+    );
+
+    if (!response.ok || response.status !== 202) {
+      const body = await response.text();
+      throw new Error(`Blob batch submit failed: ${response.status} ${response.statusText}${body ? `: ${body}` : ""}`);
+    }
+
+    const parsed = await parseBlobBatchResponse(response, batch);
+
+    return {
+      status: response.status,
+      contentType: response.headers.get("content-type") ?? undefined,
+      requestId: response.headers.get("x-ms-request-id") ?? undefined,
+      errorCode: response.headers.get("x-ms-error-code") ?? undefined,
+      subResponses: parsed.subResponses,
+      subResponsesSucceededCount: parsed.subResponsesSucceededCount,
+      subResponsesFailedCount: parsed.subResponsesFailedCount,
+    };
   }
 }
 
@@ -667,14 +790,8 @@ class BlobServiceClientProxy {
   public async request(method: string, targetUrl: string, options: BlobOperationOptions = {}): Promise<Response> {
     const url = new URL(targetUrl);
     const headers = new Headers(options.headers);
-
-    if (!headers.has("x-ms-date")) {
-      headers.set("x-ms-date", new Date().toUTCString());
-    }
-
-    if (!headers.has("x-ms-version")) {
-      headers.set("x-ms-version", xmsServiceVersion);
-    }
+    applyStorageDateAndVersionHeaders(headers);
+    setKnownContentLength(headers, options.body);
 
     if (this.credential instanceof DefaultAzureCredential) {
       headers.set("Authorization", await this.credential.getAuthorizationHeader(storageOAuthScope));
@@ -683,14 +800,7 @@ class BlobServiceClientProxy {
         throw new Error("Unable to extract accountName from URL for shared key signing");
       }
 
-      const contentLength = getKnownBodyLength(options.body);
-      if (contentLength != null) {
-        headers.set("Content-Length", String(contentLength));
-      }
-
-      const stringToSign = buildStringToSign(method, url, headers, this.accountName);
-      const signature = this.credential.computeHMACSHA256(stringToSign);
-      headers.set("Authorization", `SharedKey ${this.accountName}:${signature}`);
+      headers.set("Authorization", applyBlobSharedKeyAuth(method, url, headers, this.credential));
     }
 
     return this.fetcher(url, {
@@ -720,16 +830,6 @@ function parseDateHeader(raw: string | null): Date | undefined {
 
   const parsed = new Date(raw);
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
-}
-
-function normalizeScopes(scope: string | string[]): string {
-  const scopes = Array.isArray(scope) ? scope : [scope];
-  const value = scopes[0];
-  if (!value) {
-    throw new Error("At least one scope is required");
-  }
-
-  return value;
 }
 
 function parseConnectionString(connectionString: string): ParsedConnectionString {
@@ -884,28 +984,200 @@ function normalizeUploadBody(
   return String(body);
 }
 
-function getKnownBodyLength(body: BodyInit | null | undefined): number | undefined {
-  if (body == null) {
-    return undefined;
+function createBatchBoundary(): string {
+  if (typeof crypto.randomUUID === "function") {
+    return `batch_${crypto.randomUUID()}`;
   }
 
-  if (typeof body === "string") {
-    return new TextEncoder().encode(body).byteLength;
+  return `batch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
+function extractBlobUri(blobUrl: string): string {
+  const url = new URL(blobUrl);
+  const path = url.pathname || "/";
+  const query = url.search || "";
+
+  return `${path}${query}`;
+}
+
+async function addAuthenticationHeadersForSubRequest(
+  method: string,
+  subRequestUrl: string,
+  headers: Record<string, string>,
+  credential?: CredentialLike,
+): Promise<void> {
+  if (credential == null) {
+    return;
   }
 
-  if (body instanceof ArrayBuffer) {
-    return body.byteLength;
+  if (headers["x-ms-date"] == null) {
+    headers["x-ms-date"] = new Date().toUTCString();
   }
 
-  if (ArrayBuffer.isView(body)) {
-    return body.byteLength;
+  if (credential instanceof DefaultAzureCredential) {
+    headers.Authorization = await credential.getAuthorizationHeader(storageOAuthScope);
+    return;
   }
 
-  if (body instanceof Blob) {
-    return body.size;
+  if (credential instanceof StorageSharedKeyCredential) {
+    const accountName = getAccountNameFromUrl(subRequestUrl);
+    if (accountName.length === 0) {
+      return;
+    }
+
+    const url = new URL(subRequestUrl);
+    const requestHeaders = new Headers(headers);
+    const signingCredential = {
+      accountName,
+      computeHMACSHA256: (stringToSign: string) => credential.computeHMACSHA256(stringToSign),
+    };
+
+    headers.Authorization = applyBlobSharedKeyAuth(method, url, requestHeaders, signingCredential);
+  }
+}
+
+function getBoundaryFromContentType(contentType: string | null): string {
+  if (contentType == null || !contentType.includes("boundary=")) {
+    throw new Error("Blob batch response missing boundary");
   }
 
-  return undefined;
+  const boundary = contentType.split("boundary=")[1]?.trim();
+  if (boundary == null || boundary.length === 0) {
+    throw new Error("Blob batch response boundary is empty");
+  }
+
+  return boundary;
+}
+
+function parseHeaderLine(rawHeader: string): { name: string; value: string } {
+  const delimiter = ": ";
+  const index = rawHeader.indexOf(delimiter);
+  if (index < 0) {
+    throw new Error(`Invalid header line in batch response: ${rawHeader}`);
+  }
+
+  return {
+    name: rawHeader.slice(0, index),
+    value: rawHeader.slice(index + delimiter.length),
+  };
+}
+
+async function parseBlobBatchResponse(
+  response: Response,
+  batch: BlobBatch,
+): Promise<{
+  subResponses: Array<BlobBatchSubResponse | undefined>;
+  subResponsesSucceededCount: number;
+  subResponsesFailedCount: number;
+}> {
+  const contentType = response.headers.get("content-type");
+  const boundary = getBoundaryFromContentType(contentType);
+  const responseText = await response.text();
+  const responseBoundary = `--${boundary}`;
+  const responseBoundaryEnd = `${responseBoundary}--`;
+
+  const subResponses: Array<BlobBatchSubResponse | undefined> = [];
+  let subResponsesSucceededCount = 0;
+  let subResponsesFailedCount = 0;
+
+  if (!responseText.includes(responseBoundaryEnd)) {
+    throw new Error("Blob batch response is malformed or missing closing boundary");
+  }
+
+  const rawSubResponses = responseText
+    .split(responseBoundary)
+    .slice(1, -1)
+    .map((raw) => raw.replace(/^\r?\n/, ""))
+    .filter((raw) => raw.trim().length > 0);
+
+  if (rawSubResponses.length !== batch.getSubRequests().size) {
+    throw new Error("Blob batch response sub response count does not match sub request count");
+  }
+
+  const subRequests = batch.getSubRequests();
+
+  for (const rawSubResponse of rawSubResponses) {
+    const lines = rawSubResponse.split(/\r\n/);
+    const parsed: BlobBatchSubResponse = { headers: {} };
+    let headerStartFound = false;
+    let headerEndFound = false;
+    let contentId = Number.NaN;
+
+    for (const line of lines) {
+      if (!headerStartFound) {
+        if (line.toLowerCase().startsWith("content-id:")) {
+          const parsedContentId = parseInt(line.slice("content-id:".length).trim(), 10);
+          if (!Number.isNaN(parsedContentId)) {
+            contentId = parsedContentId;
+          }
+        }
+
+        if (line.startsWith("HTTP/1.1")) {
+          headerStartFound = true;
+          const statusTokens = line.split(" ");
+          const status = Number.parseInt(statusTokens[1] || "", 10);
+          parsed.status = Number.isNaN(status) ? 0 : status;
+          parsed.statusMessage = statusTokens.slice(2).join(" ");
+        }
+
+        continue;
+      }
+
+      if (line.trim() === "") {
+        headerEndFound = true;
+        continue;
+      }
+
+      if (!headerEndFound) {
+        const { name, value } = parseHeaderLine(line);
+        if (!parsed.headers) {
+          parsed.headers = {};
+        }
+        parsed.headers[name] = value;
+        if (name.toLowerCase() === "x-ms-error-code") {
+          parsed.errorCode = value;
+        }
+        continue;
+      }
+
+      if (line.length > 0) {
+        parsed.bodyAsText = `${parsed.bodyAsText || ""}${line}`;
+      }
+    }
+
+    if (headerEndFound) {
+      const isSuccess = parsed.status >= 200 && parsed.status < 300;
+      if (!isSuccess || parsed.errorCode != null) {
+        subResponsesFailedCount += 1;
+      } else {
+        subResponsesSucceededCount += 1;
+      }
+    }
+
+    let mapped = parsed as BlobBatchSubResponse;
+    if (Number.isInteger(contentId) && contentId >= 0 && contentId < subRequests.size) {
+      mapped = {
+        ...parsed,
+        _request: subRequests.get(contentId),
+      };
+
+      if (subResponses[contentId] == null) {
+        subResponses[contentId] = mapped;
+      }
+    } else {
+      subResponses.push(mapped);
+    }
+  }
+
+  while (subResponses.length < subRequests.size) {
+    subResponses.push(undefined);
+  }
+
+  return {
+    subResponses,
+    subResponsesSucceededCount,
+    subResponsesFailedCount,
+  };
 }
 
 function extractFirst(input: string, regex: RegExp): string | undefined {
@@ -941,81 +1213,4 @@ function isIpEndpointStyle(parsedUrl: URL): boolean {
   const host = parsedUrl.hostname;
 
   return host === "localhost" || host === "host.docker.internal" || /^(\d{1,3}\.){3}\d{1,3}$/.test(host);
-}
-
-function buildStringToSign(method: string, url: URL, headers: Headers, accountName: string): string {
-  const contentEncoding = headers.get("Content-Encoding") ?? "";
-  const contentLanguage = headers.get("Content-Language") ?? "";
-  const contentLength = headers.get("Content-Length") ?? "";
-  const contentMd5 = headers.get("Content-MD5") ?? "";
-  const contentType = headers.get("Content-Type") ?? "";
-  const date = "";
-  const ifModifiedSince = headers.get("If-Modified-Since") ?? "";
-  const ifMatch = headers.get("If-Match") ?? "";
-  const ifNoneMatch = headers.get("If-None-Match") ?? "";
-  const ifUnmodifiedSince = headers.get("If-Unmodified-Since") ?? "";
-  const range = headers.get("Range") ?? "";
-
-  const canonicalizedHeaders = canonicalizeHeaders(headers);
-
-  const canonicalizedResource = canonicalizeResource(url, accountName);
-
-  return [
-    method.toUpperCase(),
-    contentEncoding,
-    contentLanguage,
-    contentLength,
-    contentMd5,
-    contentType,
-    date,
-    ifModifiedSince,
-    ifMatch,
-    ifNoneMatch,
-    ifUnmodifiedSince,
-    range,
-    canonicalizedHeaders,
-    canonicalizedResource,
-  ].join("\n");
-}
-
-function canonicalizeHeaders(headers: Headers): string {
-  const normalized: string[] = [];
-
-  for (const [name, value] of headers.entries()) {
-    const lowerCase = name.toLowerCase();
-    if (!lowerCase.startsWith("x-ms-")) {
-      continue;
-    }
-
-    normalized.push(`${lowerCase}:${value.trim()}`);
-  }
-
-  normalized.sort();
-  return normalized.join("\n");
-}
-
-function canonicalizeResource(url: URL, accountName: string): string {
-  const path = url.pathname;
-  const canonicalizedResource = `/${accountName}${path}`;
-
-  const queryParameters: Record<string, string[]> = {};
-  for (const [name, value] of url.searchParams.entries()) {
-    const lowerName = name.toLowerCase();
-    if (!queryParameters[lowerName]) {
-      queryParameters[lowerName] = [];
-    }
-
-    queryParameters[lowerName].push(value);
-  }
-
-  const queryString = Object.entries(queryParameters)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, values]) => `${name}:${values.join(",")}`)
-    .join("\n");
-
-  if (queryString.length === 0) {
-    return canonicalizedResource;
-  }
-
-  return `${canonicalizedResource}\n${queryString}`;
 }

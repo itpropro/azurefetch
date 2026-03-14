@@ -5,6 +5,8 @@ import {
   BlobServiceClient,
   DefaultAzureCredential,
   getAccountNameFromUrl,
+  BlobBatch,
+  BlobBatchClient,
   StorageSharedKeyCredential,
 } from "../src/blob";
 import { createFetchMock, textResponse } from "./helpers";
@@ -186,6 +188,29 @@ describe("BlockBlobClient", () => {
 });
 
 describe("ContainerClient.listBlobsFlat", () => {
+  test("caps maxPageSize to Azure service limits", async () => {
+    const requests: string[] = [];
+    const fetcher = createFetchMock([
+      (url) => {
+        requests.push(url);
+        return textResponse("<EnumerationResults><Blobs></Blobs><NextMarker></NextMarker></EnumerationResults>");
+      },
+    ]);
+
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
+      fetch: fetcher,
+    });
+    const container = client.getContainerClient("container");
+
+    for await (const _ of container.listBlobsFlat().byPage({ maxPageSize: 10_000 })) {
+      // no-op
+    }
+
+    expect(requests).toHaveLength(1);
+    const request = new URL(requests[0]);
+    expect(request.searchParams.get("maxresults")).toBe("5000");
+  });
+
   test("supports byPage continuation paging", async () => {
     const requests: string[] = [];
     const fetcher = createFetchMock([
@@ -297,6 +322,30 @@ describe("ContainerClient.listBlobsFlat", () => {
 });
 
 describe("BlobServiceClient.listContainers", () => {
+  test("caps maxPageSize to Azure service limits", async () => {
+    const requests: string[] = [];
+    const fetcher = createFetchMock([
+      (url) => {
+        requests.push(url);
+        return textResponse(
+          "<EnumerationResults><Containers><Container><Name>container</Name></Container></Containers><NextMarker></NextMarker></EnumerationResults>",
+        );
+      },
+    ]);
+
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
+      fetch: fetcher,
+    });
+
+    for await (const _ of client.listContainers().byPage({ maxPageSize: 9_999 })) {
+      // no-op
+    }
+
+    expect(requests).toHaveLength(1);
+    const request = new URL(requests[0]);
+    expect(request.searchParams.get("maxresults")).toBe("5000");
+  });
+
   test("supports byPage continuation paging", async () => {
     const requests: string[] = [];
     const fetcher = createFetchMock([
@@ -435,5 +484,93 @@ describe("BlockBlobClient.downloadToBuffer", () => {
     const buffer = await blobClient.downloadToBuffer(0);
 
     expect(buffer).toEqual(payload);
+  });
+});
+
+describe("Blob Batch", () => {
+  test("creates batch clients from service and container clients", () => {
+    const serviceClient = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined);
+    const serviceBatchClient = serviceClient.getBlobBatchClient();
+    expect(serviceBatchClient).toBeInstanceOf(BlobBatchClient);
+
+    const containerClient = serviceClient.getContainerClient("container");
+    const containerBatchClient = containerClient.getBlobBatchClient();
+    expect(containerBatchClient).toBeInstanceOf(BlobBatchClient);
+
+    const batch = containerBatchClient.createBatch();
+    expect(batch).toBeInstanceOf(BlobBatch);
+  });
+
+  test("submits a delete-only batch and parses sub responses", async () => {
+    const requests: Array<{ url: string; method?: string; headers?: HeadersInit; body?: string }> = [];
+    const boundary = "batchresponse_123";
+    const responseBody = [
+      `--${boundary}`,
+      "Content-Type: application/http",
+      "Content-ID: 0",
+      "",
+      "HTTP/1.1 202 Accepted",
+      "x-ms-request-id: 123",
+      "",
+      `--${boundary}`,
+      "Content-Type: application/http",
+      "Content-ID: 1",
+      "",
+      "HTTP/1.1 404 Not Found",
+      "x-ms-error-code: BlobNotFound",
+      "",
+      `--${boundary}--`,
+    ].join("\r\n");
+
+    const fetcher = createFetchMock([
+      (url, init) => {
+        requests.push({ url, method: init.method, headers: init.headers, body: init.body as string | undefined });
+        return textResponse(responseBody, 202, "Accepted", {
+          "content-type": `multipart/mixed; boundary=${boundary}`,
+        });
+      },
+    ]);
+
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
+      fetch: fetcher,
+    });
+    const batchClient = client.getBlobBatchClient();
+
+    const batch = batchClient.createBatch();
+    await batch.deleteBlob("https://myaccount.blob.core.windows.net/container/one.txt", undefined, {
+      deleteSnapshots: "include",
+    });
+    await batch.deleteBlob("https://myaccount.blob.core.windows.net/container/two.txt", undefined, {
+      deleteSnapshots: "include",
+    });
+
+    const response = await batchClient.submitBatch(batch);
+
+    expect(response.status).toBe(202);
+    expect(response.subResponsesSucceededCount).toBe(1);
+    expect(response.subResponsesFailedCount).toBe(1);
+    expect(response.subResponses[0]?.status).toBe(202);
+    expect(response.subResponses[1]?.status).toBe(404);
+    expect(response.subResponses[1]?.errorCode).toBe("BlobNotFound");
+
+    expect(response.subResponses[0]?._request?.method).toBe("DELETE");
+    expect(response.subResponses[0]?._request?.headers["x-ms-delete-snapshots"]).toBe("include");
+
+    expect(requests).toHaveLength(1);
+    const request = requests[0];
+    expect(request.method).toBe("POST");
+
+    const requestUrl = new URL(request.url);
+    expect(requestUrl.searchParams.get("comp")).toBe("batch");
+
+    const contentType = request.headers ? new Headers(request.headers as HeadersInit).get("content-type") : null;
+    expect(contentType).toBeTruthy();
+    expect(contentType).toContain("multipart/mixed; boundary=");
+
+    const requestBody = request.body || "";
+    expect(requestBody).toContain("DELETE /container/one.txt HTTP/1.1");
+    expect(requestBody).toContain("DELETE /container/two.txt HTTP/1.1");
+    expect(requestBody).toContain("x-ms-delete-snapshots: include");
+    expect(requestBody).toContain("Content-ID: 0");
   });
 });
