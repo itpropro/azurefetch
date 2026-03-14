@@ -144,6 +144,35 @@ describe("BlockBlobClient", () => {
     await expect(blobClient.exists()).resolves.toBe(false);
   });
 
+  test("maps 404 to false for deleteIfExists", async () => {
+    const fetcher = createFetchMock([() => textResponse("", 404)]);
+
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
+      fetch: fetcher,
+    });
+    const blobClient = client.getContainerClient("container").getBlockBlobClient("gone.txt");
+
+    const response = await blobClient.deleteIfExists();
+
+    expect(response).toMatchObject({
+      succeeded: false,
+      errorCode: "BlobNotFound",
+    });
+  });
+
+  test("maps success status codes for deleteIfExists", async () => {
+    const fetcher = createFetchMock([() => textResponse("", 202)]);
+
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
+      fetch: fetcher,
+    });
+    const blobClient = client.getContainerClient("container").getBlockBlobClient("file.txt");
+
+    const response = await blobClient.deleteIfExists();
+
+    expect(response).toEqual({ succeeded: true });
+  });
+
   test("reads metadata and timestamps from blob properties", async () => {
     const now = new Date("2026-01-01T00:00:00.000Z");
     const fetcher = createFetchMock([
@@ -259,6 +288,30 @@ describe("ContainerClient.listBlobsFlat", () => {
 
     expect(pages).toEqual([[]]);
     expect(requests).toHaveLength(1);
+  });
+
+  test("skips malformed blob entries and decodes xml entities", async () => {
+    const fetcher = createFetchMock([
+      () =>
+        textResponse(
+          "<EnumerationResults><Blobs><Blob><Name>first</Name></Blob><Blob><Properties /></Blob><Blob><Name>name &lt;with&gt; tag</Name></Blob></Blobs><NextMarker>   </NextMarker></EnumerationResults>",
+        ),
+    ]);
+
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
+      fetch: fetcher,
+    });
+    const container = client.getContainerClient("container");
+
+    const pages = [] as string[][];
+    for await (const page of container.listBlobsFlat().byPage()) {
+      pages.push(page.segment.blobItems.map((item) => item.name));
+    }
+
+    expect(pages).toEqual([["first", "name <with> tag"]]);
+    expect(pages[0][1]).toBe("name <with> tag");
+    expect(pages[0]).toHaveLength(2);
+    expect(pages[0][1]).toContain("<with>");
   });
 });
 
