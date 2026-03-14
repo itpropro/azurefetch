@@ -5,3 +5,18 @@ export { getServicePrincipalToken } from "./service-principal";
 export { getManagedIdentityToken } from "./managed-identity";
 export { getDefaultAzureCredentialToken } from "./default-credential";
 export { AzureFetchError, TokenUnavailableError, TokenRequestError } from "./errors";
+export {
+  AccountSASPermissions,
+  BlobServiceClient,
+  ContainerClient,
+  DefaultAzureCredential,
+  StorageSharedKeyCredential,
+  getAccountNameFromUrl,
+} from "./blob";
+export type {
+  BlobDeleteIfExistsResponse,
+  BlobGetPropertiesResponse,
+  BlobItem,
+  ListBlobsFlatSegment,
+  ContainerCreateIfNotExistsResponse,
+} from "./blob";
