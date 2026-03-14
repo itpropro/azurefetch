@@ -155,6 +155,36 @@ Live service-principal runs can be slower than local Azurite runs due network la
 
 The integration suite validates create/list/read/write/delete for blobs and tables and removes all created resources in cleanup.
 
+## Standalone storage benchmark
+
+The repository includes an opt-in benchmark that runs real Azure Storage operations for blob/table workflows:
+
+- create container, upload, download, list containers, list blobs, delete blob/container
+- create table, upsert entity, get entity, list entities, delete entity/table
+- warmup iterations (excluded from summary) and percentile summaries
+
+Enable it with `AZUREFETCH_RUN_STORAGE_BENCHMARK=1` and the same credentials used by integration tests:
+
+```bash
+AZUREFETCH_RUN_STORAGE_BENCHMARK=1 \
+AZUREFETCH_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=..." \
+bun run bench:storage
+```
+
+Adjust iterations and warmup with:
+
+```bash
+AZUREFETCH_BENCHMARK_ITERATIONS=10 \
+AZUREFETCH_BENCHMARK_WARMUP=2 \
+bun run bench:storage
+```
+
+Run against Azurite:
+
+```bash
+bun run bench:storage:azurite
+```
+
 ## License
 
 MIT
