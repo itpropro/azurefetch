@@ -46,6 +46,5 @@ temp/
 __blobstorage__/
 __queuestorage__/
 __tablestorage__/
-debug.log
 .azurite/
 .azurite.json
