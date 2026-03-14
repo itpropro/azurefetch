@@ -1,6 +1,46 @@
-node_modules
-dist
+## Node artifacts
+node_modules/
+dist/
+bun.lockb
+bun.lock
 pnpm-lock.yaml
+
+## Logs and temp files
+*.log
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+debug.log
+.env
+.env.*
+!.env.example
+
+## Secrets and credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*.pub
+*.asc
+*.gpg
+*.secret
+
+## Test/build artifacts
+coverage/
+.nyc_output/
+.vitest/
+test-results/
+playwright-report/
+.playwright-cli/
+
+## Local OS files
+.DS_Store
+Thumbs.db
+tmp/
+temp/
 
 # Azure Storage Azurite local emulator artifacts
 __blobstorage__/
