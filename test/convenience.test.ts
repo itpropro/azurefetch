@@ -51,8 +51,8 @@ describe("uploadText", () => {
   });
 });
 
-describe("downloadText and downloadJson", () => {
-  test("returns response and decoded text", async () => {
+describe("downloadText", () => {
+  test("returns the response and decoded text", async () => {
     const fetcher = createFetchMock([() => textResponse("payload")]);
     const client = new AzureClient({
       fetch: fetcher,
@@ -64,8 +64,10 @@ describe("downloadText and downloadJson", () => {
     expect(response.response.status).toBe(200);
     expect(response.text).toBe("payload");
   });
+});
 
-  test("parses JSON for downloadJson", async () => {
+describe("downloadJson", () => {
+  test("parses JSON payloads", async () => {
     const fetcher = createFetchMock([() => textResponse('{"foo":"bar"}')]);
     const client = new AzureClient({
       fetch: fetcher,
@@ -94,11 +96,8 @@ describe("downloadText and downloadJson", () => {
 });
 
 describe("table getEntity", () => {
-  test("maps 200 to parsed entity and 404 to undefined", async () => {
-    const fetcher = createFetchMock([
-      () => jsonResponse({ PartitionKey: "pk", RowKey: "rk", value: "item" }),
-      () => textResponse("", 404, "Not Found"),
-    ]);
+  test("returns the parsed entity for 200 responses", async () => {
+    const fetcher = createFetchMock([() => jsonResponse({ PartitionKey: "pk", RowKey: "rk", value: "item" })]);
     const client = new AzureClient({
       fetch: fetcher,
       credential: { getAuthorizationHeader: async () => "Bearer test" },
@@ -108,13 +107,22 @@ describe("table getEntity", () => {
       headers: { "Content-Type": "application/json" },
     });
 
-    const missing = await getEntity(client, "https://example.table.core.windows.net/mytable", "missing", "rk");
-
     expect(response.entity).toMatchObject({
       partitionKey: "pk",
       rowKey: "rk",
       value: "item",
     });
+  });
+
+  test("returns undefined for 404 responses", async () => {
+    const fetcher = createFetchMock([() => textResponse("", 404, "Not Found")]);
+    const client = new AzureClient({
+      fetch: fetcher,
+      credential: { getAuthorizationHeader: async () => "Bearer test" },
+    });
+
+    const missing = await getEntity(client, "https://example.table.core.windows.net/mytable", "missing", "rk");
+
     expect(missing).toMatchObject({
       response: expect.any(Response),
       entity: undefined,

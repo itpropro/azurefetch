@@ -47,6 +47,10 @@
       "types": "./dist/errors.d.mts",
       "import": "./dist/errors.mjs"
     },
+    "./keyvault-secrets": {
+      "types": "./dist/keyvault-secrets.d.mts",
+      "import": "./dist/keyvault-secrets.mjs"
+    },
     "./managed-identity": {
       "types": "./dist/managed-identity.d.mts",
       "import": "./dist/managed-identity.mjs"
@@ -80,6 +84,7 @@
     "format:check": "oxfmt --check",
     "test": "vitest run",
     "test:edge-smoke": "bun run test/edge-runtime-smoke.ts",
+    "test:keyvault": "AZUREFETCH_RUN_KEYVAULT_TESTS=1 vitest run test/keyvault.integration.test.ts",
     "test:storage": "AZUREFETCH_RUN_STORAGE_TESTS=1 vitest run test/storage.integration.test.ts",
     "test:storage:azurite": "AZUREFETCH_RUN_STORAGE_TESTS=1 AZUREFETCH_STORAGE_CONNECTION_STRING=UseDevelopmentStorage=true vitest run test/storage.integration.test.ts",
     "bench:storage": "AZUREFETCH_RUN_STORAGE_BENCHMARK=1 bun run bench/storage.benchmark.ts",

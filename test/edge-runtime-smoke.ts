@@ -2,11 +2,13 @@ import { readFile } from "node:fs/promises";
 
 const rootBundleUrl = new URL("../dist/index.mjs", import.meta.url);
 const blobBundleUrl = new URL("../dist/blob.mjs", import.meta.url);
+const keyVaultBundleUrl = new URL("../dist/keyvault-secrets.mjs", import.meta.url);
 const tableBundleUrl = new URL("../dist/table.mjs", import.meta.url);
 
 await assertNoNodeBuiltinLeakage();
 await assertRootBundleImportsWithoutNodeGlobals();
 await assertBlobAndTableBundlesSupportEdgeSafeAuthPaths();
+await assertKeyVaultBundleSupportsEdgeSafeAuthPaths();
 
 async function assertNoNodeBuiltinLeakage(): Promise<void> {
   const bundle = await readFile(rootBundleUrl, "utf8");
@@ -33,6 +35,7 @@ async function assertRootBundleImportsWithoutNodeGlobals(): Promise<void> {
       "BlobBatchClient",
       "BlobServiceClient",
       "ContainerClient",
+      "KeyVaultSecretClient",
       "StorageSharedKeyCredential",
       "TableClient",
       "TableServiceClient",
@@ -41,6 +44,60 @@ async function assertRootBundleImportsWithoutNodeGlobals(): Promise<void> {
       if (forbiddenExport in rootModule) {
         throw new Error(`Root bundle should not expose ${forbiddenExport}; use an explicit subpath import instead`);
       }
+    }
+  });
+}
+
+async function assertKeyVaultBundleSupportsEdgeSafeAuthPaths(): Promise<void> {
+  await withNodeGlobalsDisabled(async () => {
+    const { KeyVaultSecretClient } = (await import(`${keyVaultBundleUrl.href}?edge-smoke=${Date.now()}`)) as {
+      KeyVaultSecretClient: typeof import("../src/keyvault-secrets").KeyVaultSecretClient;
+    };
+
+    const requests: Array<{ url: string; headers: Headers }> = [];
+    const fetcher: typeof globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const requestHeaders = input instanceof Request ? input.headers : new Headers(init.headers);
+      requests.push({
+        url: typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url,
+        headers: new Headers(requestHeaders),
+      });
+      return new Response(
+        JSON.stringify({
+          id: "https://example.vault.azure.net/secrets/edge-secret/version-1",
+          value: "edge-value",
+          attributes: {},
+        }),
+        {
+          status: 200,
+          statusText: "OK",
+          headers: { "content-type": "application/json" },
+        },
+      );
+    };
+
+    const client = new KeyVaultSecretClient(
+      "https://example.vault.azure.net",
+      { getAuthorizationHeader: async () => "Bearer edge-token" },
+      { fetch: fetcher },
+    );
+
+    const secret = await client.getSecret("edge-secret");
+
+    if (secret.value !== "edge-value") {
+      throw new Error("Expected Key Vault secret value to round-trip in edge smoke test");
+    }
+
+    if (requests.length !== 1) {
+      throw new Error(`Expected 1 Key Vault request, received ${requests.length}`);
+    }
+
+    const request = requests[0];
+    if (request.url !== "https://example.vault.azure.net/secrets/edge-secret/?api-version=7.6") {
+      throw new Error(`Unexpected Key Vault request URL ${request.url}`);
+    }
+
+    if (request.headers.get("Authorization") !== "Bearer edge-token") {
+      throw new Error("Expected bearer auth header for Key Vault edge smoke request");
     }
   });
 }

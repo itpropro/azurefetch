@@ -14,6 +14,7 @@ export default defineBuildConfig({
         "./src/default-credential.ts",
         "./src/default-azure-credential.ts",
         "./src/errors.ts",
+        "./src/keyvault-secrets.ts",
         "./src/managed-identity.ts",
         "./src/provider.ts",
         "./src/service-principal.ts",

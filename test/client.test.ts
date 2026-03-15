@@ -118,7 +118,7 @@ describe("AzureClient", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
-  test("works with legacy Blob/Table clients and DefaultAzureCredential", async () => {
+  test("AzureClient.sign works with DefaultAzureCredential", async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
       return textResponse("", 200, "OK", {
         "x-test": (init.headers instanceof Headers ? init.headers.get("x-test") || "" : "") as string,
@@ -128,10 +128,6 @@ describe("AzureClient", () => {
     const authSpy = vi.spyOn(credential, "getAuthorizationHeader").mockResolvedValue("Bearer default");
 
     const client = new AzureClient({ credential, fetch: fetcher });
-    const blobClient = new BlobServiceClient("https://myaccount.blob.core.windows.net", credential, { fetch: fetcher });
-    const tableClient = new TableServiceClient("https://myaccount.table.core.windows.net", credential, {
-      fetch: fetcher,
-    });
 
     await client.sign("https://graph.microsoft.com", {
       azure: {
@@ -139,14 +135,45 @@ describe("AzureClient", () => {
       },
     });
 
+    expect(fetcher).toHaveBeenCalledTimes(0);
+    expect(authSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test("BlobServiceClient uses DefaultAzureCredential authorization headers", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
+      return textResponse("", 200, "OK", {
+        "x-test": (init.headers instanceof Headers ? init.headers.get("x-test") || "" : "") as string,
+      });
+    });
+    const credential = new DefaultAzureCredential();
+    const authSpy = vi.spyOn(credential, "getAuthorizationHeader").mockResolvedValue("Bearer default");
+    const blobClient = new BlobServiceClient("https://myaccount.blob.core.windows.net", credential, { fetch: fetcher });
+
     await blobClient.getContainerClient("container").createIfNotExists();
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(authSpy).toHaveBeenCalledTimes(1);
+    const blobAuth = new Headers(fetcher.mock.calls[0]?.[1]?.headers as HeadersInit);
+    expect(blobAuth.get("Authorization")).toBe("Bearer default");
+  });
+
+  test("TableServiceClient uses DefaultAzureCredential authorization headers", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
+      return textResponse("", 200, "OK", {
+        "x-test": (init.headers instanceof Headers ? init.headers.get("x-test") || "" : "") as string,
+      });
+    });
+    const credential = new DefaultAzureCredential();
+    const authSpy = vi.spyOn(credential, "getAuthorizationHeader").mockResolvedValue("Bearer default");
+    const tableClient = new TableServiceClient("https://myaccount.table.core.windows.net", credential, {
+      fetch: fetcher,
+    });
+
     await tableClient.request("GET", "https://myaccount.table.core.windows.net/Tables");
 
-    expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(authSpy).toHaveBeenCalledTimes(3);
-    const blobAuth = new Headers(fetcher.mock.calls[0]?.[1]?.headers as HeadersInit);
-    const tableAuth = new Headers(fetcher.mock.calls[1]?.[1]?.headers as HeadersInit);
-    expect(blobAuth.get("Authorization")).toBe("Bearer default");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(authSpy).toHaveBeenCalledTimes(1);
+    const tableAuth = new Headers(fetcher.mock.calls[0]?.[1]?.headers as HeadersInit);
     expect(tableAuth.get("Authorization")).toBe("Bearer default");
   });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import { BlobServiceClient } from "../src/blob";
 import { DefaultAzureCredential } from "../src/node";
@@ -59,18 +59,11 @@ const testConfig: TestConfig | undefined =
 
 const shouldRunIntegration = runStorageTests && testConfig != null;
 
-function randomToken(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
 if (shouldRunIntegration) {
   describe("storage integration (manual)", () => {
     if (testConfig == null) {
       return;
     }
-
-    const blobToken = randomToken();
-    const tableToken = randomToken();
 
     const credential = new DefaultAzureCredential();
     const blobService =
@@ -83,137 +76,163 @@ if (shouldRunIntegration) {
         ? TableServiceClient.fromConnectionString(testConfig.connectionString)
         : new TableServiceClient(testConfig.tableEndpoint, credential);
 
-    async function deleteTableRowsInTransaction(
-      tableClient: ReturnType<TableServiceClient["getTableClient"]>,
-      rows: Array<{ partitionKey: string; rowKey: string }>,
-    ): Promise<void> {
-      if (rows.length === 0) {
-        return;
-      }
-
-      const response = await tableClient.submitTransaction(
-        rows.map((row) => ({
-          action: "delete",
-          partitionKey: row.partitionKey,
-          rowKey: row.rowKey,
-        })),
-      );
-
-      expect(response.status).toBe(202);
-      expect(response.subResponses).toHaveLength(rows.length);
-      for (const rowResponse of response.subResponses) {
-        expect([204, 202]).toContain(rowResponse?.status);
-      }
-    }
-
     describe("blob operations", () => {
-      test("creates containers and validates list pagination", async () => {
-        const containerPrefix = `azfetch-blob-${blobToken}`;
+      describe.sequential("container lifecycle", () => {
+        const containerPrefix = `azfetch-blob-${randomToken()}`;
         const firstContainerName = `${containerPrefix}-1`;
         const secondContainerName = `${containerPrefix}-2`;
         const firstContainer = blobService.getContainerClient(firstContainerName);
         const secondContainer = blobService.getContainerClient(secondContainerName);
 
-        try {
-          const createFirst = await firstContainer.createIfNotExists();
-          expect(createFirst.succeeded).toBe(true);
+        afterAll(async () => {
+          await secondContainer.deleteIfExists();
+          await firstContainer.deleteIfExists();
+        });
 
-          const createSecond = await secondContainer.createIfNotExists();
-          expect(createSecond.succeeded).toBe(true);
+        test("createIfNotExists creates the first container", async () => {
+          const response = await firstContainer.createIfNotExists();
 
-          const listed = [] as string[];
+          expect(response.succeeded).toBe(true);
+        });
+
+        test("createIfNotExists creates the second container", async () => {
+          const response = await secondContainer.createIfNotExists();
+
+          expect(response.succeeded).toBe(true);
+        });
+
+        test("listContainers paginates with maxPageSize=1", async () => {
+          const listed: string[] = [];
+
           for await (const page of blobService.listContainers().byPage({ maxPageSize: 1 })) {
             listed.push(...page.segment.containerItems.map((item) => item.name));
           }
 
           expect(listed).toContain(firstContainerName);
           expect(listed).toContain(secondContainerName);
-        } finally {
-          await secondContainer.deleteIfExists();
-          await firstContainer.deleteIfExists();
-        }
+        });
       });
 
-      test("manages blob lifecycle and continuation", async () => {
-        const container = blobService.getContainerClient(`azfetch-blob-${blobToken}-${randomToken()}`);
+      describe.sequential("block blob lifecycle", () => {
+        const container = blobService.getContainerClient(`azfetch-blob-${randomToken()}`);
         const blobName = "folder/hello.txt";
         const replacementBlobName = "folder/world.txt";
         const blob = container.getBlockBlobClient(blobName);
         const replacementBlob = container.getBlockBlobClient(replacementBlobName);
 
-        try {
+        beforeAll(async () => {
           const createResponse = await container.createIfNotExists();
           expect(createResponse.succeeded).toBe(true);
+        });
 
-          const uploadResponse = await blob.upload("hello", 5);
-          expect(uploadResponse.status).toBe(201);
+        afterAll(async () => {
+          await container.deleteIfExists();
+        });
 
+        test("upload stores the blob contents", async () => {
+          const response = await blob.upload("hello", 5);
+
+          expect(response.status).toBe(201);
+        });
+
+        test("exists returns true for an uploaded blob", async () => {
           expect(await blob.exists()).toBe(true);
+        });
 
-          const downloadText = await (await blob.download(0, 5)).text();
-          expect(downloadText).toBe("hello");
+        test("download returns the uploaded text", async () => {
+          const text = await (await blob.download(0, 5)).text();
 
+          expect(text).toBe("hello");
+        });
+
+        test("downloadToBuffer returns the uploaded bytes", async () => {
           const downloaded = await blob.downloadToBuffer(0);
+
           expect(new TextDecoder().decode(downloaded)).toBe("hello");
+        });
 
+        test("getProperties returns an etag", async () => {
           const properties = await blob.getProperties();
-          expect(properties.etag).toBeTruthy();
 
+          expect(properties.etag).toBeTruthy();
+        });
+
+        test("listBlobsFlat paginates uploaded blob names", async () => {
           await replacementBlob.upload("world", 5);
 
-          const blobNames = [] as string[];
+          const blobNames: string[] = [];
           for await (const page of container.listBlobsFlat().byPage({ maxPageSize: 1 })) {
             blobNames.push(...page.segment.blobItems.map((item) => item.name));
           }
 
           expect(blobNames).toContain(blobName);
           expect(blobNames).toContain(replacementBlobName);
+        });
 
-          const deleteResponse = await blob.deleteIfExists();
-          expect(deleteResponse.succeeded).toBe(true);
+        test("deleteIfExists returns succeeded=true for an existing blob", async () => {
+          const response = await blob.deleteIfExists();
 
-          const missingDelete = await blob.deleteIfExists();
-          expect(missingDelete).toEqual({ succeeded: false, errorCode: "BlobNotFound" });
-        } finally {
-          await container.deleteIfExists();
-        }
+          expect(response.succeeded).toBe(true);
+        });
+
+        test("deleteIfExists returns BlobNotFound for a missing blob", async () => {
+          const response = await blob.deleteIfExists();
+
+          expect(response).toEqual({ succeeded: false, errorCode: "BlobNotFound" });
+        });
       });
 
-      test("covers container exists and blob deletion helpers", async () => {
-        const containerName = `azfetch-blob-${blobToken}-${randomToken()}-helpers`;
-        const container = blobService.getContainerClient(containerName);
+      describe.sequential("container helpers", () => {
+        const container = blobService.getContainerClient(`azfetch-blob-${randomToken()}-helpers`);
         const presentBlob = container.getBlockBlobClient("present.txt");
+        const missingContainer = blobService.getContainerClient(`azfetch-blob-${randomToken()}-missing`);
 
-        const missingContainer = blobService.getContainerClient(`azfetch-blob-${blobToken}-${randomToken()}-missing`);
+        afterAll(async () => {
+          await container.deleteIfExists();
+        });
 
-        try {
-          const missingContainerDelete = await missingContainer.deleteIfExists();
-          expect(missingContainerDelete).toEqual({ succeeded: false, errorCode: "ContainerNotFound" });
+        test("deleteIfExists returns ContainerNotFound for a missing container", async () => {
+          const response = await missingContainer.deleteIfExists();
 
+          expect(response).toEqual({ succeeded: false, errorCode: "ContainerNotFound" });
+        });
+
+        test("exists returns false before the container is created", async () => {
           expect(await container.exists()).toBe(false);
+        });
 
-          const createResponse = await container.createIfNotExists();
-          expect(createResponse.succeeded).toBe(true);
+        test("createIfNotExists creates the helper container", async () => {
+          const response = await container.createIfNotExists();
 
+          expect(response.succeeded).toBe(true);
+        });
+
+        test("exists returns true after the container is created", async () => {
           expect(await container.exists()).toBe(true);
+        });
 
+        test("BlockBlobClient.exists returns false before upload", async () => {
           expect(await presentBlob.exists()).toBe(false);
+        });
 
+        test("container.deleteBlob removes an existing blob", async () => {
           const uploadResponse = await presentBlob.upload("persist", 7);
           expect(uploadResponse.status).toBe(201);
           expect(await presentBlob.exists()).toBe(true);
 
           await container.deleteBlob("present.txt");
-          expect(await presentBlob.exists()).toBe(false);
 
-          await container.deleteBlob("present.txt");
           expect(await presentBlob.exists()).toBe(false);
-        } finally {
-          await container.deleteIfExists();
-        }
+        });
+
+        test("container.deleteBlob ignores a missing blob", async () => {
+          await container.deleteBlob("present.txt");
+
+          expect(await presentBlob.exists()).toBe(false);
+        });
       });
 
-      test("builds account SAS URLs", () => {
+      test("generateAccountSasUrl includes the requested permissions and services", () => {
         const sasUrl = blobService.generateAccountSasUrl(new Date("2026-01-01T00:00:00.000Z"), {
           permissions: "rwl",
           services: "bf",
@@ -230,22 +249,29 @@ if (shouldRunIntegration) {
         expect(parsed.searchParams.get("sv")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       });
 
-      test("submits blob batch delete operations", async () => {
-        const batchContainer = blobService.getContainerClient(`azfetch-blob-${blobToken}-${randomToken()}-batch`);
+      describe.sequential("blob batch", () => {
+        const batchContainer = blobService.getContainerClient(`azfetch-blob-${randomToken()}-batch`);
         const firstBlob = batchContainer.getBlockBlobClient("delete-1.txt");
         const secondBlob = batchContainer.getBlockBlobClient("delete-2.txt");
         const batchClient = blobService.getBlobBatchClient();
         const expectedRequestUris = [new URL(firstBlob.url).pathname, new URL(secondBlob.url).pathname];
 
-        try {
-          expect(blobService.getBlobBatchClient()).toBeDefined();
-          expect(batchContainer.getBlobBatchClient()).toBeDefined();
-
+        beforeAll(async () => {
           await batchContainer.createIfNotExists();
-
           await firstBlob.upload("first", 5);
           await secondBlob.upload("second", 6);
+        });
 
+        afterAll(async () => {
+          await batchContainer.deleteIfExists();
+        });
+
+        test("getBlobBatchClient is available from the service and container", () => {
+          expect(blobService.getBlobBatchClient()).toBeDefined();
+          expect(batchContainer.getBlobBatchClient()).toBeDefined();
+        });
+
+        test("submitBatch deletes both blobs", async () => {
           const batch = batchClient.createBatch();
           await batch.deleteBlob(firstBlob.url, undefined);
           await batch.deleteBlob(secondBlob.url, undefined);
@@ -263,68 +289,80 @@ if (shouldRunIntegration) {
             expect(responsePart?._request?.uri).toBeDefined();
             expect(expectedRequestUris).toContain(responsePart?._request?.uri);
           }
-        } finally {
-          await batchContainer.deleteIfExists();
-        }
+        });
       });
     });
 
     describe("table operations", () => {
-      test("creates and deletes tables with idempotent semantics", async () => {
-        const tableName = `azfetchtable${tableToken.replace(/-/g, "")}`;
+      describe.sequential("table lifecycle", () => {
+        const tableName = createTableName("lifecycle");
         const tableClient = tableService.getTableClient(tableName);
 
-        try {
-          const createResponse = await tableService.createTableIfNotExists(tableName);
-          expect(createResponse.succeeded).toBe(true);
-
-          const createViaClient = await tableClient.createIfNotExists();
-          expect(createViaClient.succeeded).toBe(false);
-          expect(createViaClient.errorCode).toBe("TableAlreadyExists");
-
-          const deleteViaClient = await tableClient.deleteIfExists();
-          expect(deleteViaClient).toEqual({ succeeded: true });
-
-          const deleteViaClientAgain = await tableClient.deleteIfExists();
-          expect(deleteViaClientAgain).toEqual({
-            succeeded: false,
-            errorCode: "TableNotFound",
-          });
-        } finally {
+        afterAll(async () => {
           await tableService.deleteTableIfExists(tableName);
-        }
+        });
+
+        test("createTableIfNotExists creates a new table", async () => {
+          const response = await tableService.createTableIfNotExists(tableName);
+
+          expect(response.succeeded).toBe(true);
+        });
+
+        test("TableClient.createIfNotExists returns TableAlreadyExists for an existing table", async () => {
+          const response = await tableClient.createIfNotExists();
+
+          expect(response.succeeded).toBe(false);
+          expect(response.errorCode).toBe("TableAlreadyExists");
+        });
+
+        test("TableClient.deleteIfExists returns succeeded=true for an existing table", async () => {
+          const response = await tableClient.deleteIfExists();
+
+          expect(response).toEqual({ succeeded: true });
+        });
+
+        test("deleteTableIfExists returns TableNotFound for a missing table", async () => {
+          const response = await tableService.deleteTableIfExists(tableName);
+
+          expect(response).toEqual({ succeeded: false, errorCode: "TableNotFound" });
+        });
       });
 
-      test("supports table client listEntities alias", async () => {
-        const tableName = `azfetchtable${tableToken.replace(/-/g, "").slice(0, 24)}alias`;
-        const tableClient = tableService.getTableClient(`${tableName}entities`);
+      describe.sequential("listEntities alias", () => {
+        const tableName = createTableName("alias");
+        const tableClient = tableService.getTableClient(tableName);
         const rowsForCleanup: Array<{ partitionKey: string; rowKey: string }> = [];
 
-        try {
-          const createResponse = await tableService.createTableIfNotExists(`${tableName}entities`);
-          expect(createResponse.succeeded).toBe(true);
+        beforeAll(async () => {
+          const response = await tableService.createTableIfNotExists(tableName);
+          expect(response.succeeded).toBe(true);
+        });
 
+        afterAll(async () => {
+          await deleteTableRowsInTransaction(tableClient, rowsForCleanup);
+          await tableService.deleteTableIfExists(tableName);
+        });
+
+        test("upsertEntity writes the first aliased row", async () => {
           await tableClient.upsertEntity({
             partitionKey: "partition",
             rowKey: "row-a",
             value: "first",
           });
-          rowsForCleanup.push({
-            partitionKey: "partition",
-            rowKey: "row-a",
-          });
+          rowsForCleanup.push({ partitionKey: "partition", rowKey: "row-a" });
+        });
 
+        test("upsertEntity writes the second aliased row", async () => {
           await tableClient.upsertEntity({
             partitionKey: "partition",
             rowKey: "row-b",
             value: "second",
           });
-          rowsForCleanup.push({
-            partitionKey: "partition",
-            rowKey: "row-b",
-          });
+          rowsForCleanup.push({ partitionKey: "partition", rowKey: "row-b" });
+        });
 
-          const rowKeys = [] as string[];
+        test("listEntities paginates with continuation tokens", async () => {
+          const rowKeys: string[] = [];
           const continuationTokens: Array<string | undefined> = [];
 
           for await (const page of tableClient.listEntities().byPage({ maxPageSize: 1 })) {
@@ -335,90 +373,160 @@ if (shouldRunIntegration) {
           expect(rowKeys).toHaveLength(2);
           expect(continuationTokens[0]).toBeTruthy();
           expect(continuationTokens[continuationTokens.length - 1]).toBeUndefined();
-        } finally {
-          await deleteTableRowsInTransaction(tableClient, rowsForCleanup);
-          await tableService.deleteTableIfExists(`${tableName}entities`);
-        }
+        });
       });
 
-      test("supports table deletion idempotency at service level", async () => {
-        const tableName = `azfetchtable${tableToken.replace(/-/g, "").slice(0, 24)}delete`;
+      describe.sequential("entity lifecycle", () => {
+        const tableName = createTableName("entities");
         const tableClient = tableService.getTableClient(tableName);
-
-        const createResponse = await tableService.createTableIfNotExists(tableName);
-        expect(createResponse.succeeded).toBe(true);
-
-        const deleteResponse = await tableClient.deleteIfExists();
-        expect(deleteResponse).toEqual({ succeeded: true });
-
-        const deleteMissing = await tableService.deleteTableIfExists(tableName);
-        expect(deleteMissing).toEqual({ succeeded: false, errorCode: "TableNotFound" });
-      });
-
-      test("supports entity CRUD and paging", async () => {
-        const tableName = `azfetchtable${tableToken.replace(/-/g, "").slice(0, 30)}`;
-        const tableClient = tableService.getTableClient(`${tableName}entities`);
         const rowsForCleanup: Array<{ partitionKey: string; rowKey: string }> = [];
 
-        try {
-          const createResponse = await tableService.createTableIfNotExists(`${tableName}entities`);
-          expect(createResponse.succeeded).toBe(true);
+        beforeAll(async () => {
+          const response = await tableService.createTableIfNotExists(tableName);
+          expect(response.succeeded).toBe(true);
+        });
 
+        afterAll(async () => {
+          await deleteTableRowsInTransaction(tableClient, rowsForCleanup);
+          await tableService.deleteTableIfExists(tableName);
+        });
+
+        test("upsertEntity writes the first entity", async () => {
           await tableClient.upsertEntity({
             partitionKey: "partition",
             rowKey: "row-a",
             value: "first",
           });
-          rowsForCleanup.push({
-            partitionKey: "partition",
-            rowKey: "row-a",
-          });
+          rowsForCleanup.push({ partitionKey: "partition", rowKey: "row-a" });
+        });
 
+        test("upsertEntity writes the second entity", async () => {
           await tableClient.upsertEntity({
             partitionKey: "partition",
             rowKey: "row-b",
             value: "second",
           });
-          rowsForCleanup.push({
-            partitionKey: "partition",
-            rowKey: "row-b",
-          });
+          rowsForCleanup.push({ partitionKey: "partition", rowKey: "row-b" });
+        });
 
+        test("getEntity returns the written entity", async () => {
           const entity = await tableClient.getEntity("partition", "row-a");
+
           expect(entity).toMatchObject({
             partitionKey: "partition",
             rowKey: "row-a",
             value: "first",
           });
+        });
 
-          const pageValues = [] as string[];
+        test("list().byPage paginates with continuation tokens", async () => {
+          const rowKeys: string[] = [];
           const continuationTokens: Array<string | undefined> = [];
+
           for await (const page of tableClient.list().byPage({ maxPageSize: 1 })) {
-            pageValues.push(...page.value.map((entity) => entity.rowKey));
+            rowKeys.push(...page.value.map((entity) => entity.rowKey));
             continuationTokens.push(page.continuationToken);
           }
 
-          expect(pageValues).toHaveLength(2);
+          expect(rowKeys).toHaveLength(2);
           expect(continuationTokens[0]).toBeTruthy();
           expect(continuationTokens[continuationTokens.length - 1]).toBeUndefined();
+        });
 
+        test("getEntity returns undefined for a missing row", async () => {
           const missing = await tableClient.getEntity("missing", "row");
-          expect(missing).toBeUndefined();
 
-          const deleteExisting = await tableClient.deleteEntity("partition", "row-a");
-          expect(deleteExisting.succeeded).toBe(true);
+          expect(missing).toBeUndefined();
+        });
+
+        test("deleteEntity returns succeeded=true for an existing row", async () => {
+          const response = await tableClient.deleteEntity("partition", "row-a");
+
+          expect(response.succeeded).toBe(true);
 
           const deletedRowIndex = rowsForCleanup.findIndex((row) => row.rowKey === "row-a");
           if (deletedRowIndex >= 0) {
             rowsForCleanup.splice(deletedRowIndex, 1);
           }
+        });
 
-          const deleteMissing = await tableClient.deleteEntity("partition", "row-a");
-          expect(deleteMissing).toEqual({ succeeded: false, errorCode: "ResourceNotFound" });
-        } finally {
+        test("deleteEntity returns ResourceNotFound for a missing row", async () => {
+          const response = await tableClient.deleteEntity("partition", "row-a");
+
+          expect(response).toEqual({ succeeded: false, errorCode: "ResourceNotFound" });
+        });
+      });
+
+      describe.sequential("table batch", () => {
+        const tableName = createTableName("batch");
+        const tableClient = tableService.getTableClient(tableName);
+        const rowsForCleanup: Array<{ partitionKey: string; rowKey: string }> = [];
+        const batchedRows = [
+          { partitionKey: "batch-partition", rowKey: "row-a", value: "first" },
+          { partitionKey: "batch-partition", rowKey: "row-b", value: "second" },
+        ] as const;
+
+        beforeAll(async () => {
+          const response = await tableService.createTableIfNotExists(tableName);
+          expect(response.succeeded).toBe(true);
+        });
+
+        afterAll(async () => {
           await deleteTableRowsInTransaction(tableClient, rowsForCleanup);
-          await tableService.deleteTableIfExists(`${tableName}entities`);
-        }
+          await tableService.deleteTableIfExists(tableName);
+        });
+
+        test("submitTransaction creates multiple rows", async () => {
+          const response = await tableClient.submitTransaction(
+            batchedRows.map((row) => ({
+              action: "create" as const,
+              entity: row,
+            })),
+          );
+
+          rowsForCleanup.push(
+            ...batchedRows.map((row) => ({
+              partitionKey: row.partitionKey,
+              rowKey: row.rowKey,
+            })),
+          );
+
+          expect(response.status).toBe(202);
+          expect(response.subResponses).toHaveLength(2);
+          for (const subResponse of response.subResponses) {
+            expect([201, 204]).toContain(subResponse.status);
+          }
+
+          const firstRow = await tableClient.getEntity(batchedRows[0].partitionKey, batchedRows[0].rowKey);
+          const secondRow = await tableClient.getEntity(batchedRows[1].partitionKey, batchedRows[1].rowKey);
+
+          expect(firstRow).toMatchObject(batchedRows[0]);
+          expect(secondRow).toMatchObject(batchedRows[1]);
+        });
+
+        test("submitTransaction deletes multiple rows", async () => {
+          const response = await tableClient.submitTransaction(
+            batchedRows.map((row) => ({
+              action: "delete" as const,
+              partitionKey: row.partitionKey,
+              rowKey: row.rowKey,
+            })),
+          );
+
+          expect(response.status).toBe(202);
+          expect(response.subResponses).toHaveLength(2);
+          for (const subResponse of response.subResponses) {
+            expect([202, 204]).toContain(subResponse.status);
+          }
+
+          rowsForCleanup.length = 0;
+          await expect(
+            tableClient.getEntity(batchedRows[0].partitionKey, batchedRows[0].rowKey),
+          ).resolves.toBeUndefined();
+          await expect(
+            tableClient.getEntity(batchedRows[1].partitionKey, batchedRows[1].rowKey),
+          ).resolves.toBeUndefined();
+        });
       });
     });
   });
@@ -426,4 +534,35 @@ if (shouldRunIntegration) {
   describe.skip("storage integration (manual)", () => {
     test("is skipped without storage runtime config", () => {});
   });
+}
+
+function randomToken(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createTableName(suffix: string): string {
+  return `azfetchtable${randomToken().replace(/-/g, "")}${suffix}`.slice(0, 63);
+}
+
+async function deleteTableRowsInTransaction(
+  tableClient: ReturnType<TableServiceClient["getTableClient"]>,
+  rows: Array<{ partitionKey: string; rowKey: string }>,
+): Promise<void> {
+  if (rows.length === 0) {
+    return;
+  }
+
+  const response = await tableClient.submitTransaction(
+    rows.map((row) => ({
+      action: "delete",
+      partitionKey: row.partitionKey,
+      rowKey: row.rowKey,
+    })),
+  );
+
+  expect(response.status).toBe(202);
+  expect(response.subResponses).toHaveLength(rows.length);
+  for (const rowResponse of response.subResponses) {
+    expect([204, 202]).toContain(rowResponse?.status);
+  }
 }

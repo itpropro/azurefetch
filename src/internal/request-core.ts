@@ -3,6 +3,7 @@ import { createTokenProvider } from "../provider";
 import type { AccessToken, TokenProvider } from "../types";
 
 export const storageOAuthScope = "https://storage.azure.com/.default";
+export const keyVaultOAuthScope = "https://vault.azure.net/.default";
 
 interface HeaderCredential {
   getAuthorizationHeader(scope?: string | string[]): Promise<string>;
