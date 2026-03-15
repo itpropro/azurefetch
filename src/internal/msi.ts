@@ -85,7 +85,8 @@ export function resolveManagedIdentityConfig(
       };
     }
 
-    default: {
+    case "Imds":
+    case "Unknown": {
       const authorityHost = getEnv(env, "AZURE_POD_IDENTITY_AUTHORITY_HOST") ?? "http://169.254.169.254";
 
       return {
@@ -97,6 +98,10 @@ export function resolveManagedIdentityConfig(
         },
         method: "GET",
       };
+    }
+
+    default: {
+      throw new TypeError("Unsupported managed identity source");
     }
   }
 }

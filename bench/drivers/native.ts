@@ -1,4 +1,6 @@
-import { BlobServiceClient, DefaultAzureCredential, TableClient, TableServiceClient } from "../../src";
+import { BlobServiceClient } from "../../src/blob";
+import { DefaultAzureCredential } from "../../src/node";
+import { TableClient, TableServiceClient } from "../../src/table";
 
 import type { BlobBenchmarkService, StorageBenchmarkDriver, TableBenchmarkService, TestConfig } from "../types";
 

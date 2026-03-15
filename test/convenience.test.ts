@@ -172,19 +172,6 @@ describe("upsertEntity", () => {
     expect(requests[0]).toBe("PUT https://example.table.core.windows.net/mytable(PartitionKey='pk',RowKey='rk')");
     expect(requests[1]).toBe("POST https://example.table.core.windows.net/mytable");
   });
-
-  test("throws for unsupported upsert mode", async () => {
-    const client = new AzureClient({ credential: { getAuthorizationHeader: async () => "Bearer test" } });
-
-    await expect(
-      upsertEntity(
-        client,
-        "https://example.table.core.windows.net/mytable",
-        { partitionKey: "pk", rowKey: "rk" },
-        "Merge",
-      ),
-    ).rejects.toThrow("Unsupported table upsert mode: Merge");
-  });
 });
 
 describe("listEntitiesPage", () => {
@@ -233,8 +220,8 @@ describe("listEntitiesPage", () => {
     expect(tokens).toEqual(["NextPartitionKey=nextPk&NextRowKey=nextRk", undefined]);
     expect(pages).toHaveLength(2);
     expect(pages[0].entities).toEqual([
-      { partitionKey: "pk1", rowKey: "rk1", PartitionKey: "pk1", RowKey: "rk1" },
-      { partitionKey: "pk2", rowKey: "rk2", PartitionKey: "pk2", RowKey: "rk2" },
+      { partitionKey: "pk1", rowKey: "rk1" },
+      { partitionKey: "pk2", rowKey: "rk2" },
     ]);
   });
 });

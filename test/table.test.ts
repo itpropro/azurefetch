@@ -1,7 +1,8 @@
 import { describe, expect, test } from "vitest";
 
 import { TableClient, TableServiceClient } from "../src/table";
-import { DefaultAzureCredential as BlobDefaultAzureCredential, StorageSharedKeyCredential } from "../src/blob";
+import { StorageSharedKeyCredential } from "../src/blob";
+import { DefaultAzureCredential as BlobDefaultAzureCredential } from "../src/default-azure-credential";
 import { createFetchMock, textResponse } from "./helpers";
 
 describe("TableServiceClient.fromConnectionString", () => {
@@ -56,8 +57,6 @@ describe("TableServiceClient", () => {
     expect(response).toEqual({
       partitionKey: "pk",
       rowKey: "rk",
-      PartitionKey: "pk",
-      RowKey: "rk",
       name: "item",
     });
 
@@ -143,7 +142,7 @@ describe("TableClient", () => {
       pages.push(page.value);
     }
 
-    expect(pages).toEqual([[{ partitionKey: "pk", rowKey: "rk", PartitionKey: "pk", RowKey: "rk" }]]);
+    expect(pages).toEqual([[{ partitionKey: "pk", rowKey: "rk" }]]);
     expect(requests).toHaveLength(1);
     const request = new URL(requests[0]);
     expect(request.searchParams.get("$top")).toBe("1000");
@@ -241,20 +240,6 @@ describe("TableClient", () => {
     expect(payload).toEqual({ PartitionKey: "pk", RowKey: "rk", label: "inserted" });
     const requestHeaders = new Headers(captured[1].headers || {});
     expect(requestHeaders.get("If-Match")).toBeNull();
-  });
-
-  test("throws for unsupported upsert modes", async () => {
-    const client = new TableClient(
-      "https://myaccount.table.core.windows.net/mytable",
-      "mytable",
-      undefined,
-      () => textResponse("", 204),
-      "https://myaccount.table.core.windows.net",
-    );
-
-    await expect(client.upsertEntity({ partitionKey: "pk", rowKey: "rk" }, "Merge")).rejects.toThrow(
-      "Unsupported table upsert mode: Merge",
-    );
   });
 
   test("returns false for missing entities", async () => {
@@ -444,10 +429,7 @@ describe("TableClient", () => {
       }
     }
 
-    expect(pages).toEqual([
-      [{ partitionKey: "pk1", rowKey: "rk1", PartitionKey: "pk1", RowKey: "rk1" }],
-      [{ partitionKey: "pk3", rowKey: "rk3", PartitionKey: "pk3", RowKey: "rk3" }],
-    ]);
+    expect(pages).toEqual([[{ partitionKey: "pk1", rowKey: "rk1" }], [{ partitionKey: "pk3", rowKey: "rk3" }]]);
     expect(tokens).toEqual(["NextPartitionKey=nextPk&NextRowKey=nextRk", undefined]);
     const firstRequest = new URL(requests[0]);
     expect(firstRequest.searchParams.get("$top")).toBe("2");
@@ -487,7 +469,7 @@ describe("TableClient.listEntities", () => {
       pages.push(page.value);
     }
 
-    expect(pages).toEqual([[{ partitionKey: "pk", rowKey: "rk", PartitionKey: "pk", RowKey: "rk" }]]);
+    expect(pages).toEqual([[{ partitionKey: "pk", rowKey: "rk" }]]);
     expect(requests).toHaveLength(1);
     const request = new URL(requests[0]);
     expect(request.searchParams.get("NextPartitionKey")).toBe("start");

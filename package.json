@@ -14,6 +14,58 @@
     ".": {
       "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs"
+    },
+    "./node": {
+      "types": "./dist/node.d.mts",
+      "import": "./dist/node.mjs"
+    },
+    "./blob": {
+      "types": "./dist/blob.d.mts",
+      "import": "./dist/blob.mjs"
+    },
+    "./table": {
+      "types": "./dist/table.d.mts",
+      "import": "./dist/table.mjs"
+    },
+    "./client": {
+      "types": "./dist/client.d.mts",
+      "import": "./dist/client.mjs"
+    },
+    "./convenience": {
+      "types": "./dist/convenience.d.mts",
+      "import": "./dist/convenience.mjs"
+    },
+    "./default-credential": {
+      "types": "./dist/default-credential.d.mts",
+      "import": "./dist/default-credential.mjs"
+    },
+    "./default-azure-credential": {
+      "types": "./dist/default-azure-credential.d.mts",
+      "import": "./dist/default-azure-credential.mjs"
+    },
+    "./errors": {
+      "types": "./dist/errors.d.mts",
+      "import": "./dist/errors.mjs"
+    },
+    "./managed-identity": {
+      "types": "./dist/managed-identity.d.mts",
+      "import": "./dist/managed-identity.mjs"
+    },
+    "./provider": {
+      "types": "./dist/provider.d.mts",
+      "import": "./dist/provider.mjs"
+    },
+    "./service-principal": {
+      "types": "./dist/service-principal.d.mts",
+      "import": "./dist/service-principal.mjs"
+    },
+    "./storage-shared-key-credential": {
+      "types": "./dist/storage-shared-key-credential.d.mts",
+      "import": "./dist/storage-shared-key-credential.mjs"
+    },
+    "./token": {
+      "types": "./dist/token.d.mts",
+      "import": "./dist/token.mjs"
     }
   },
   "scripts": {
@@ -27,12 +79,13 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "vitest run",
+    "test:edge-smoke": "bun run test/edge-runtime-smoke.ts",
     "test:storage": "AZUREFETCH_RUN_STORAGE_TESTS=1 vitest run test/storage.integration.test.ts",
     "test:storage:azurite": "AZUREFETCH_RUN_STORAGE_TESTS=1 AZUREFETCH_STORAGE_CONNECTION_STRING=UseDevelopmentStorage=true vitest run test/storage.integration.test.ts",
     "bench:storage": "AZUREFETCH_RUN_STORAGE_BENCHMARK=1 bun run bench/storage.benchmark.ts",
     "bench:storage:azurite": "AZUREFETCH_RUN_STORAGE_BENCHMARK=1 AZUREFETCH_STORAGE_CONNECTION_STRING=UseDevelopmentStorage=true bun run bench/storage.benchmark.ts",
     "test:watch": "vitest",
-    "check": "oxfmt --check && oxlint . && oxlint . --type-aware && vitest run && obuild"
+    "check": "oxfmt --check && oxlint . && oxlint . --type-aware && vitest run && obuild && bun run test:edge-smoke"
   },
   "devDependencies": {
     "@azure/data-tables": "13.3.2",

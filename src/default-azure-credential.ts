@@ -21,7 +21,7 @@ export class DefaultAzureCredential {
     }
 
     const provider = createTokenProvider({
-      loadToken: () =>
+      loadToken: async () =>
         getDefaultAzureCredentialToken({
           scope: scopes.length === 1 ? scopes[0] : scopes,
           fetch: this.options.fetch,

@@ -54,4 +54,4 @@ export function createTokenProvider(options: CreateTokenProviderOptions): TokenP
   };
 }
 
-export { TokenProvider };
+export type { TokenProvider };

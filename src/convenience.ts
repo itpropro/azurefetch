@@ -1,3 +1,11 @@
+import { encodeContinuationToken, parseContinuationToken } from "./internal/continuation-token";
+import {
+  getPartitionKey,
+  getRowKey,
+  normalizeEntityPayload,
+  parseTableEntity,
+  parseTableEntityList,
+} from "./internal/table-entity";
 import { addQueryParameters } from "./internal/storage-request";
 import { AzureClient, type AzureRequestInit } from "./client";
 import type { TableEntity } from "./table";
@@ -5,7 +13,7 @@ import type { TableEntity } from "./table";
 const defaultTextContentType = "text/plain; charset=utf-8";
 const maxTablePageSize = 1000;
 
-type TableUpsertMode = "Replace" | "Merge";
+type TableUpsertMode = "Replace";
 
 type BlobTextRequestOptions = Omit<AzureRequestInit, "method" | "body">;
 type TableEntityOptions = Omit<AzureRequestInit, "method" | "body">;
@@ -92,23 +100,39 @@ export async function downloadText(
   };
 }
 
-export async function downloadJson<T = unknown>(
+export function downloadJson(
   client: AzureClient,
   blobUrl: string,
   options: BlobTextRequestOptions = {},
-): Promise<BlobDownloadJsonResponse<T>> {
+): Promise<BlobDownloadJsonResponse<unknown>>;
+export function downloadJson<T>(
+  client: AzureClient,
+  blobUrl: string,
+  options: BlobTextRequestOptions,
+  parseValue: (value: unknown) => T,
+): Promise<BlobDownloadJsonResponse<T>>;
+export async function downloadJson<T>(
+  client: AzureClient,
+  blobUrl: string,
+  options: BlobTextRequestOptions = {},
+  parseValue?: (value: unknown) => T,
+): Promise<BlobDownloadJsonResponse<T> | BlobDownloadJsonResponse<unknown>> {
   const { response, text } = await downloadText(client, blobUrl, options);
 
-  let value: T;
+  let value: unknown;
   try {
-    value = JSON.parse(text) as T;
+    value = parseJson(text);
   } catch {
     throw new Error(`downloadJson failed: unable to parse response body for ${blobUrl}`);
   }
 
+  if (parseValue == null) {
+    return { response, value };
+  }
+
   return {
     response,
-    value,
+    value: parseValue(value),
   };
 }
 
@@ -136,7 +160,7 @@ export async function getEntity(
     throw new Error(`getEntity failed: ${response.status} ${response.statusText}`);
   }
 
-  const raw = await response.json();
+  const raw = parseJson(await response.text());
   return {
     response,
     entity: parseTableEntity(raw),
@@ -147,7 +171,7 @@ export async function upsertEntity(
   client: AzureClient,
   tableUrl: string,
   entity: TableEntity | Record<string, unknown>,
-  updateMode: TableUpsertMode = "Replace",
+  _updateMode: TableUpsertMode = "Replace",
   options: TableEntityOptions = {},
 ): Promise<TableUpsertEntityResponse> {
   const normalizedPartitionKey = getPartitionKey(entity);
@@ -160,10 +184,6 @@ export async function upsertEntity(
     Prefer: "return-no-content",
     "If-Match": "*",
   });
-
-  if (updateMode !== "Replace") {
-    throw new Error(`Unsupported table upsert mode: ${updateMode}`);
-  }
 
   const body = JSON.stringify(payload);
   const putResponse = await client.fetch(requestEntityUrl, {
@@ -214,11 +234,12 @@ export async function* listEntitiesPage(
 ): AsyncGenerator<TableEntityPage> {
   const { continuationToken, maxPageSize, headers, ...requestInit } = options;
   let nextContinuationToken = continuationToken;
+  let hasMore = true;
 
-  while (true) {
+  while (hasMore) {
     const requestQuery: Record<string, string> = {};
     if (maxPageSize != null) {
-      requestQuery["$top"] = String(Math.min(maxPageSize, maxTablePageSize));
+      requestQuery.$top = String(Math.min(maxPageSize, maxTablePageSize));
     }
 
     const parsedContinuation = parseContinuationToken(nextContinuationToken);
@@ -244,8 +265,7 @@ export async function* listEntitiesPage(
       throw new Error(`listEntitiesPage failed: ${response.status} ${response.statusText}`);
     }
 
-    const body = await response.text();
-    const entities = parseTableEntityList(body);
+    const entities = parseTableEntityList(await response.text());
     const nextPartitionKey = response.headers.get("x-ms-continuation-NextPartitionKey");
     const nextRowKey = response.headers.get("x-ms-continuation-NextRowKey");
     const hasNext =
@@ -263,16 +283,16 @@ export async function* listEntitiesPage(
     };
 
     if (!hasNext) {
-      return;
+      hasMore = false;
+      continue;
     }
 
     nextContinuationToken = pageContinuationToken;
   }
 }
 
-interface ContinuationState {
-  partitionKey: string;
-  rowKey: string;
+function parseJson(text: string): unknown {
+  return JSON.parse(text);
 }
 
 function ensureHeaders(input: HeadersInit | undefined, defaults: Record<string, string>): Headers {
@@ -292,134 +312,8 @@ function normalizeTableUrl(rawTableUrl: string): string {
   return parsed.toString().replace(/\/$/, "");
 }
 
-function getPartitionKey(entity: TableEntity | Record<string, unknown>): string {
-  if (typeof entity.partitionKey === "string") {
-    return entity.partitionKey;
-  }
-
-  if (typeof entity.PartitionKey === "string") {
-    return entity.PartitionKey;
-  }
-
-  throw new Error("Entity is missing PartitionKey/partitionKey");
-}
-
-function getRowKey(entity: TableEntity | Record<string, unknown>): string {
-  if (typeof entity.rowKey === "string") {
-    return entity.rowKey;
-  }
-
-  if (typeof entity.RowKey === "string") {
-    return entity.RowKey;
-  }
-
-  throw new Error("Entity is missing RowKey/rowKey");
-}
-
-function normalizeEntityPayload(
-  entity: TableEntity | Record<string, unknown>,
-  partitionKey: string,
-  rowKey: string,
-): Record<string, unknown> {
-  const payload: Record<string, unknown> = {};
-
-  for (const [name, value] of Object.entries(entity)) {
-    if (name === "partitionKey" || name === "rowKey") {
-      continue;
-    }
-
-    if (value !== undefined) {
-      payload[name] = value;
-    }
-  }
-
-  payload.PartitionKey = partitionKey;
-  payload.RowKey = rowKey;
-
-  return payload;
-}
-
 function buildTableEntityUrl(tableUrl: string, partitionKey: string, rowKey: string): string {
   const encodedPartitionKey = encodeURIComponent(partitionKey.replaceAll("'", "''"));
   const encodedRowKey = encodeURIComponent(rowKey.replaceAll("'", "''"));
   return `${normalizeTableUrl(tableUrl)}(PartitionKey='${encodedPartitionKey}',RowKey='${encodedRowKey}')`;
-}
-
-function parseTableEntity(rawEntity: unknown): TableEntity {
-  if (rawEntity == null || typeof rawEntity !== "object") {
-    throw new Error("Invalid table entity response");
-  }
-
-  const partitionKeyRaw = (rawEntity as { [key: string]: unknown }).PartitionKey;
-  const rowKeyRaw = (rawEntity as { [key: string]: unknown }).RowKey;
-
-  if (typeof partitionKeyRaw !== "string" || typeof rowKeyRaw !== "string") {
-    throw new Error("Invalid table entity response");
-  }
-
-  const entity: TableEntity = {
-    partitionKey: partitionKeyRaw,
-    rowKey: rowKeyRaw,
-  };
-
-  for (const [name, value] of Object.entries(rawEntity as { [key: string]: unknown })) {
-    entity[name] = value;
-  }
-
-  return entity;
-}
-
-function parseTableEntityList(body: string): TableEntity[] {
-  if (body.length === 0) {
-    return [];
-  }
-
-  const parsed = JSON.parse(body) as { value?: unknown };
-  if (parsed == null || typeof parsed !== "object") {
-    return [];
-  }
-
-  const rawEntities = parsed.value;
-  if (!Array.isArray(rawEntities)) {
-    return [];
-  }
-
-  const entities: TableEntity[] = [];
-  for (const entity of rawEntities) {
-    if (entity == null || typeof entity !== "object") {
-      continue;
-    }
-
-    const candidate = entity as { [key: string]: unknown };
-    if (typeof candidate.PartitionKey !== "string" || typeof candidate.RowKey !== "string") {
-      continue;
-    }
-
-    entities.push(parseTableEntity(candidate));
-  }
-
-  return entities;
-}
-
-function parseContinuationToken(token: string | undefined): ContinuationState | undefined {
-  if (!token) {
-    return undefined;
-  }
-
-  const params = new URLSearchParams(token);
-  const partitionKey = params.get("NextPartitionKey");
-  const rowKey = params.get("NextRowKey");
-
-  if (partitionKey == null || rowKey == null) {
-    return undefined;
-  }
-
-  return { partitionKey, rowKey };
-}
-
-function encodeContinuationToken(state: ContinuationState): string {
-  const params = new URLSearchParams();
-  params.set("NextPartitionKey", state.partitionKey);
-  params.set("NextRowKey", state.rowKey);
-  return params.toString();
 }

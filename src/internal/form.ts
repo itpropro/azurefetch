@@ -9,9 +9,9 @@ export function toFormUrlEncoded(values: FormValue[]): string {
 
 export function toFormEntries(record: Record<string, string | undefined>): FormValue[] {
   return Object.entries(record)
-    .filter(([, value]) => value !== undefined)
+    .filter(([, value]): value is string => value !== undefined)
     .map(([key, value]) => ({
       key,
-      value: value as string,
+      value,
     }));
 }

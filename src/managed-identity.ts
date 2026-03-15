@@ -21,11 +21,11 @@ interface ManagedIdentityOptions {
 }
 
 export async function getManagedIdentityToken(options: ManagedIdentityOptions): Promise<AccessToken> {
-  if (options.scope == null || options.scope.length === 0) {
+  if (options.scope.length === 0) {
     throw new TypeError("Scope is required");
   }
 
-  if (options.scope == null || !options.scope.endsWith("/.default")) {
+  if (!options.scope.endsWith("/.default")) {
     throw new TypeError("Scope must end with /.default");
   }
 
@@ -76,7 +76,7 @@ export async function getManagedIdentityToken(options: ManagedIdentityOptions): 
       }),
     );
 
-    const payload = await fetchJson<unknown>(
+    const payload = await fetchJson(
       config.endpoint,
       {
         method: config.method,
@@ -84,7 +84,7 @@ export async function getManagedIdentityToken(options: ManagedIdentityOptions): 
         body,
       },
       fetcher,
-    ).catch((error) => {
+    ).catch((error: unknown) => {
       if (error instanceof TokenRequestError) {
         throw error;
       }
@@ -110,7 +110,7 @@ export async function getManagedIdentityToken(options: ManagedIdentityOptions): 
     url.searchParams.set(key, value);
   }
 
-  const payload = await fetchJson<unknown>(
+  const payload = await fetchJson(
     url.toString(),
     {
       method: config.method,
@@ -131,7 +131,9 @@ async function ensureImdsAvailable(
   appendQuery(url, "api-version", "2018-02-01");
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), probeTimeoutMs);
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, probeTimeoutMs);
 
   try {
     const response = await fetcher(url.toString(), {
@@ -147,7 +149,7 @@ async function ensureImdsAvailable(
     }
 
     return;
-  } catch (error) {
+  } catch (error: unknown) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new TokenUnavailableError("IMDS token endpoint probe timed out", error);
     }

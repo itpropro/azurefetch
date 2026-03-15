@@ -1,4 +1,5 @@
-import { DefaultAzureCredential, StorageSharedKeyCredential, getAccountNameFromUrl } from "./blob";
+import { StorageSharedKeyCredential } from "./storage-shared-key-credential";
+import { encodeContinuationToken, parseContinuationToken } from "./internal/continuation-token";
 import { storageOAuthScope } from "./internal/request-core";
 import {
   addQueryParameters,
@@ -7,6 +8,15 @@ import {
   setKnownContentLength,
   storageServiceVersion,
 } from "./internal/storage-request";
+import { getAccountNameFromUrl } from "./internal/storage-url";
+import {
+  getPartitionKey,
+  getRowKey,
+  normalizeEntityPayload,
+  parseTableEntity,
+  parseTableEntityList,
+  type ParsedTableEntity,
+} from "./internal/table-entity";
 
 const xmsServiceVersion = storageServiceVersion;
 const odataVersions = "3.0;NetFx";
@@ -17,9 +27,13 @@ interface TableClientOptions {
   fetch?: typeof globalThis.fetch;
 }
 
-type CredentialLike = DefaultAzureCredential | StorageSharedKeyCredential | undefined;
+interface AuthorizationCredential {
+  getAuthorizationHeader(scopes?: string | string[]): Promise<string>;
+}
 
-type OperationMode = "Merge" | "Replace";
+type CredentialLike = AuthorizationCredential | StorageSharedKeyCredential | undefined;
+
+type OperationMode = "Replace";
 
 interface TableOperationOptions {
   headers?: HeadersInit;
@@ -65,11 +79,6 @@ export interface TableTransactionResponse {
   subResponses: Array<{ status: number }>;
 }
 
-interface ContinuationState {
-  partitionKey: string;
-  rowKey: string;
-}
-
 interface ParsedTableConnectionString {
   kind: "AccountConnString" | "SASConnString";
   url: string;
@@ -88,11 +97,7 @@ export interface TableDeleteResponse {
   errorCode?: string;
 }
 
-export interface TableEntity {
-  partitionKey: string;
-  rowKey: string;
-  [key: string]: unknown;
-}
+export interface TableEntity extends ParsedTableEntity {}
 
 export interface TableEntityResponse {
   readonly value: TableEntity[];
@@ -117,7 +122,7 @@ export class TableServiceClient {
     this.url = parsed;
     this.accountName = accountName;
     this.credential = credential;
-    this.fetcher = options?.fetch || globalThis.fetch;
+    this.fetcher = options?.fetch ?? globalThis.fetch;
 
     if (credential instanceof StorageSharedKeyCredential && accountName.length === 0) {
       throw new Error("Unable to extract accountName from provided URL for StorageSharedKeyCredential");
@@ -127,9 +132,14 @@ export class TableServiceClient {
   public static fromConnectionString(connectionString: string, options?: TableClientOptions): TableServiceClient {
     const parsed = parseTableConnectionString(connectionString);
     if (parsed.kind === "AccountConnString") {
+      const accountKey = parsed.accountKey;
+      if (accountKey == null) {
+        throw new Error("Invalid AccountKey in the provided Connection String");
+      }
+
       return new TableServiceClient(
         parsed.url,
-        new StorageSharedKeyCredential(parsed.accountName, parsed.accountKey || ""),
+        new StorageSharedKeyCredential(parsed.accountName, accountKey),
         options,
       );
     }
@@ -217,20 +227,14 @@ export class TableServiceClient {
 
     setKnownContentLength(headers, options.body);
 
-    if (this.credential instanceof DefaultAzureCredential) {
+    if (hasAuthorizationCredential(this.credential)) {
       headers.set("Authorization", await this.credential.getAuthorizationHeader(storageOAuthScope));
     } else if (this.credential instanceof StorageSharedKeyCredential) {
       if (!this.accountName) {
         throw new Error("Unable to extract accountName from URL for shared key signing");
       }
 
-      headers.set(
-        "Authorization",
-        await applyTableSharedKeyLiteAuth(method, requestUrl, headers, {
-          accountName: this.accountName,
-          accountKey: this.credential.accountKey,
-        }),
-      );
+      headers.set("Authorization", await applyTableSharedKeyLiteAuth(method, requestUrl, headers, this.credential));
     }
 
     return this.fetcher(requestUrl.toString(), {
@@ -242,17 +246,20 @@ export class TableServiceClient {
 }
 
 export class TableClient {
+  private readonly service: TableServiceClient;
+
   constructor(
     public readonly url: string,
     public readonly tableName: string,
     private readonly credential: CredentialLike,
     private readonly fetcher: typeof globalThis.fetch,
     private readonly serviceUrl: string,
-  ) {}
+  ) {
+    this.service = new TableServiceClient(serviceUrl, credential, { fetch: fetcher });
+  }
 
   public async createIfNotExists(): Promise<TableCreateIfNotExistsResponse> {
-    const tableService = new TableServiceClient(this.serviceUrl, this.credential, { fetch: this.fetcher });
-    return tableService.createTableIfNotExists(this.tableName);
+    return this.service.createTableIfNotExists(this.tableName);
   }
 
   public async getEntity(partitionKey: string, rowKey: string): Promise<TableEntity | undefined> {
@@ -266,17 +273,13 @@ export class TableClient {
       throw new Error(`Get entity failed: ${response.status} ${response.statusText}`);
     }
 
-    return parseTableEntity(await response.json());
+    return parseTableEntity(parseJson(await response.text()));
   }
 
   public async upsertEntity(
     entity: TableEntity | Record<string, unknown>,
-    updateMode: OperationMode = "Replace",
+    _updateMode: OperationMode = "Replace",
   ): Promise<void> {
-    if (updateMode !== "Replace") {
-      throw new Error(`Unsupported table upsert mode: ${updateMode}`);
-    }
-
     const partitionKey = getPartitionKey(entity);
     const rowKey = getRowKey(entity);
     const payload = normalizeEntityPayload(entity, partitionKey, rowKey);
@@ -366,9 +369,7 @@ export class TableClient {
   public list(): {
     byPage: (options?: { continuationToken?: string; maxPageSize?: number }) => AsyncIterable<TableEntityResponse>;
   } {
-    return {
-      byPage: (options) => this.listEntitiesByPage(options),
-    };
+    return this.listEntities();
   }
 
   public listEntities(): {
@@ -383,89 +384,94 @@ export class TableClient {
     const subResponses: Array<{ status: number }> = [];
 
     for (const action of actions) {
-      if (action.action === "create") {
-        const partitionKey = getPartitionKey(action.entity);
-        const rowKey = getRowKey(action.entity);
-        const payload = normalizeEntityPayload(action.entity, partitionKey, rowKey);
+      switch (action.action) {
+        case "create": {
+          const partitionKey = getPartitionKey(action.entity);
+          const rowKey = getRowKey(action.entity);
+          const payload = normalizeEntityPayload(action.entity, partitionKey, rowKey);
 
-        const response = await this.request("POST", this.url, {
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json;odata=nometadata",
-            Prefer: "return-no-content",
-          },
-          body: JSON.stringify(payload),
-        });
+          const response = await this.request("POST", this.url, {
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json;odata=nometadata",
+              Prefer: "return-no-content",
+            },
+            body: JSON.stringify(payload),
+          });
 
-        if (!response.ok) {
-          throw new Error(`Table transaction create failed: ${response.status} ${response.statusText}`);
-        }
+          if (!response.ok) {
+            throw new Error(`Table transaction create failed: ${response.status} ${response.statusText}`);
+          }
 
-        subResponses.push({ status: response.status });
-        continue;
-      }
-
-      if (action.action === "update" || action.action === "upsert") {
-        const partitionKey = getPartitionKey(action.entity);
-        const rowKey = getRowKey(action.entity);
-        const payload = normalizeEntityPayload(action.entity, partitionKey, rowKey);
-
-        const response = await this.request("PUT", entityUrl(this.url, partitionKey, rowKey), {
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json;odata=nometadata",
-            Prefer: "return-no-content",
-            "If-Match": "*",
-          },
-          body: JSON.stringify(payload),
-        });
-
-        if (response.ok || response.status === 204) {
           subResponses.push({ status: response.status });
-          continue;
+          break;
         }
 
-        if (action.action === "update") {
-          throw new Error(`Table transaction update failed: ${response.status} ${response.statusText}`);
+        case "update":
+        case "upsert": {
+          const partitionKey = getPartitionKey(action.entity);
+          const rowKey = getRowKey(action.entity);
+          const payload = normalizeEntityPayload(action.entity, partitionKey, rowKey);
+
+          const response = await this.request("PUT", entityUrl(this.url, partitionKey, rowKey), {
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json;odata=nometadata",
+              Prefer: "return-no-content",
+              "If-Match": "*",
+            },
+            body: JSON.stringify(payload),
+          });
+
+          if (response.ok || response.status === 204) {
+            subResponses.push({ status: response.status });
+            break;
+          }
+
+          if (action.action === "update") {
+            throw new Error(`Table transaction update failed: ${response.status} ${response.statusText}`);
+          }
+
+          if (response.status !== 404) {
+            throw new Error(`Table transaction upsert failed: ${response.status} ${response.statusText}`);
+          }
+
+          const insertResponse = await this.request("POST", this.url, {
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json;odata=nometadata",
+              Prefer: "return-no-content",
+            },
+            body: JSON.stringify(payload),
+          });
+
+          if (!insertResponse.ok && insertResponse.status !== 204) {
+            throw new Error(`Table transaction upsert failed: ${insertResponse.status} ${insertResponse.statusText}`);
+          }
+
+          subResponses.push({ status: insertResponse.status });
+          break;
         }
 
-        if (response.status !== 404) {
-          throw new Error(`Table transaction upsert failed: ${response.status} ${response.statusText}`);
+        case "delete": {
+          const response = await this.request("DELETE", entityUrl(this.url, action.partitionKey, action.rowKey), {
+            headers: {
+              "If-Match": "*",
+            },
+          });
+
+          if (!response.ok) {
+            throw new Error(`Table transaction delete failed: ${response.status} ${response.statusText}`);
+          }
+
+          subResponses.push({ status: response.status });
+          break;
         }
 
-        const insertResponse = await this.request("POST", this.url, {
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json;odata=nometadata",
-            Prefer: "return-no-content",
-          },
-          body: JSON.stringify(payload),
-        });
-
-        if (!insertResponse.ok && insertResponse.status !== 204) {
-          throw new Error(`Table transaction upsert failed: ${insertResponse.status} ${insertResponse.statusText}`);
+        default: {
+          throw new Error(`Unsupported table transaction action: ${action.action}`);
         }
-
-        subResponses.push({ status: insertResponse.status });
-        continue;
       }
-
-      if (action.action === "delete") {
-        const response = await this.request("DELETE", entityUrl(this.url, action.partitionKey, action.rowKey), {
-          headers: {
-            "If-Match": "*",
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error(`Table transaction delete failed: ${response.status} ${response.statusText}`);
-        }
-
-        subResponses.push({ status: response.status });
-        continue;
-      }
-
-      throw new Error(`Unsupported table transaction action: ${action.action}`);
     }
 
     return {
@@ -480,11 +486,12 @@ export class TableClient {
   }): AsyncGenerator<TableEntityResponse> {
     let continuationToken = options?.continuationToken;
     const maxPageSize = options?.maxPageSize;
+    let hasMore = true;
 
-    while (true) {
+    while (hasMore) {
       const query: Record<string, string> = {};
       if (maxPageSize != null) {
-        query["$top"] = String(Math.min(maxPageSize, maxTablePageSize));
+        query.$top = String(Math.min(maxPageSize, maxTablePageSize));
       }
 
       const continuationState = parseContinuationToken(continuationToken);
@@ -498,8 +505,7 @@ export class TableClient {
         throw new Error(`List entities failed: ${response.status} ${response.statusText}`);
       }
 
-      const bodyText = await response.text();
-      const listResponse = parseListEntitiesResponse(bodyText);
+      const listResponse = parseTableEntityList(await response.text());
 
       const nextPartitionKey = response.headers.get("x-ms-continuation-NextPartitionKey");
       const nextRowKey = response.headers.get("x-ms-continuation-NextRowKey");
@@ -517,7 +523,8 @@ export class TableClient {
       };
 
       if (!hasNext) {
-        break;
+        hasMore = false;
+        continue;
       }
 
       continuationToken = nextContinuationToken;
@@ -525,13 +532,12 @@ export class TableClient {
   }
 
   private async request(method: string, targetUrl: string, options: TableOperationOptions = {}): Promise<Response> {
-    const tableService = new TableServiceClient(this.serviceUrl, this.credential, { fetch: this.fetcher });
     const headers = new Headers(options.headers ?? {});
     if (options.body != null && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
     }
 
-    const response = await tableService.request(method, targetUrl, {
+    const response = await this.service.request(method, targetUrl, {
       ...options,
       headers,
     });
@@ -573,7 +579,9 @@ function parseTableConnectionString(connectionString: string): ParsedTableConnec
   const defaultProtocol = parts.DefaultEndpointsProtocol?.toLowerCase();
   const endpointSuffix = parts.EndpointSuffix;
   const accountSas = parts.SharedAccessSignature;
-  const accountName = parts.AccountName || (tableEndpoint ? getAccountNameFromUrl(tableEndpoint) : "");
+  const accountNameFromEndpoint = tableEndpoint == null ? undefined : getAccountNameFromUrl(tableEndpoint);
+  const accountName =
+    parts.AccountName == null || parts.AccountName.length === 0 ? accountNameFromEndpoint : parts.AccountName;
 
   if (defaultProtocol != null && accountKey != null) {
     const protocol = defaultProtocol;
@@ -583,20 +591,20 @@ function parseTableConnectionString(connectionString: string): ParsedTableConnec
       );
     }
 
-    if (!endpointSuffix && !tableEndpoint) {
+    if ((endpointSuffix == null || endpointSuffix.length === 0) && tableEndpoint == null) {
       throw new Error("Invalid EndpointSuffix in the provided Connection String");
     }
 
-    const endpoint = tableEndpoint || `${protocol}://${accountName}.table.${endpointSuffix}`;
-    if (!endpoint) {
+    const endpoint = tableEndpoint ?? `${protocol}://${accountName}.table.${endpointSuffix}`;
+    if (endpoint.length === 0) {
       throw new Error("Invalid TableEndpoint in the provided Connection String");
     }
 
-    if (!accountName) {
+    if (accountName == null || accountName.length === 0) {
       throw new Error("Invalid AccountName in the provided Connection String");
     }
 
-    if (decodeBase64ToBytes(accountKey).byteLength === 0) {
+    if (accountKey.length === 0) {
       throw new Error("Invalid AccountKey in the provided Connection String");
     }
 
@@ -609,11 +617,11 @@ function parseTableConnectionString(connectionString: string): ParsedTableConnec
   }
 
   if (accountSas != null) {
-    if (!tableEndpoint) {
+    if (tableEndpoint == null || tableEndpoint.length === 0) {
       throw new Error("Invalid TableEndpoint in the provided SAS Connection String");
     }
 
-    if (!accountName) {
+    if (accountName == null || accountName.length === 0) {
       throw new Error("Invalid AccountName in the provided SAS Connection String");
     }
 
@@ -635,21 +643,6 @@ function appendToURLPath(baseUrl: string, path: string): string {
   return url.toString().replace(/\/$/, "");
 }
 
-function decodeBase64ToBytes(base64: string): Uint8Array {
-  if (typeof globalThis.atob !== "function") {
-    throw new Error("atob is required to decode shared key values");
-  }
-
-  const binary = globalThis.atob(base64);
-  const bytes = new Uint8Array(binary.length);
-
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-
-  return bytes;
-}
-
 function entityUrl(serviceUrl: string, partitionKey: string, rowKey: string): string {
   const encodedPartitionKey = encodeURIComponent(partitionKey.replaceAll("'", "''"));
   const encodedRowKey = encodeURIComponent(rowKey.replaceAll("'", "''"));
@@ -662,128 +655,10 @@ function buildTableResourceUrl(serviceUrl: string, tableName: string): string {
   return `${serviceUrl.replace(/\/$/, "")}/Tables('${encodedName}')`;
 }
 
-function getPartitionKey(entity: TableEntity | Record<string, unknown>): string {
-  if (typeof entity.partitionKey === "string") {
-    return entity.partitionKey;
-  }
-
-  if (typeof entity.PartitionKey === "string") {
-    return entity.PartitionKey;
-  }
-
-  throw new Error("Entity is missing PartitionKey/partitionKey");
+function hasAuthorizationCredential(credential: CredentialLike): credential is AuthorizationCredential {
+  return credential != null && typeof credential.getAuthorizationHeader === "function";
 }
 
-function getRowKey(entity: TableEntity | Record<string, unknown>): string {
-  if (typeof entity.rowKey === "string") {
-    return entity.rowKey;
-  }
-
-  if (typeof entity.RowKey === "string") {
-    return entity.RowKey;
-  }
-
-  throw new Error("Entity is missing RowKey/rowKey");
-}
-
-function normalizeEntityPayload(
-  entity: TableEntity | Record<string, unknown>,
-  partitionKey: string,
-  rowKey: string,
-): Record<string, unknown> {
-  const payload: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(entity)) {
-    if (name === "partitionKey" || name === "rowKey") {
-      continue;
-    }
-
-    if (value !== undefined) {
-      payload[name] = value;
-    }
-  }
-
-  payload.PartitionKey = partitionKey;
-  payload.RowKey = rowKey;
-
-  return payload;
-}
-
-function parseTableEntity(rawEntity: unknown): TableEntity {
-  if (rawEntity == null || typeof rawEntity !== "object") {
-    throw new Error("Invalid table entity response");
-  }
-
-  const partitionKeyRaw = (rawEntity as { [key: string]: unknown }).PartitionKey;
-  const rowKeyRaw = (rawEntity as { [key: string]: unknown }).RowKey;
-
-  if (typeof partitionKeyRaw !== "string" || typeof rowKeyRaw !== "string") {
-    throw new Error("Invalid table entity response");
-  }
-
-  const entity: TableEntity = {
-    partitionKey: partitionKeyRaw,
-    rowKey: rowKeyRaw,
-  };
-
-  for (const [name, value] of Object.entries(rawEntity as { [key: string]: unknown })) {
-    entity[name] = value;
-  }
-
-  return entity;
-}
-
-function parseListEntitiesResponse(text: string): TableEntity[] {
-  if (text.length === 0) {
-    return [];
-  }
-
-  const body = JSON.parse(text) as { value?: unknown };
-
-  if (body == null || typeof body !== "object") {
-    return [];
-  }
-
-  const entities = body.value;
-  if (!Array.isArray(entities)) {
-    return [];
-  }
-
-  const parsed: TableEntity[] = [];
-  for (const entity of entities) {
-    if (typeof entity !== "object" || entity == null) {
-      continue;
-    }
-
-    const candidate = entity as { [key: string]: unknown };
-    if (typeof candidate.PartitionKey !== "string" || typeof candidate.RowKey !== "string") {
-      continue;
-    }
-
-    parsed.push(parseTableEntity(candidate));
-  }
-
-  return parsed;
-}
-
-function encodeContinuationToken(state: ContinuationState): string {
-  const params = new URLSearchParams();
-  params.set("NextPartitionKey", state.partitionKey);
-  params.set("NextRowKey", state.rowKey);
-  return params.toString();
-}
-
-function parseContinuationToken(token: string | undefined): ContinuationState | undefined {
-  if (!token) {
-    return undefined;
-  }
-
-  const params = new URLSearchParams(token);
-  const partitionKey = params.get("NextPartitionKey");
-  const rowKey = params.get("NextRowKey");
-
-  if (partitionKey == null || rowKey == null) {
-    return undefined;
-  }
-
-  return { partitionKey, rowKey };
+function parseJson(value: string): unknown {
+  return JSON.parse(value);
 }

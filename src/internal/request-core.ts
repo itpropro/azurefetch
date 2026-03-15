@@ -1,6 +1,6 @@
-import type { AccessToken, TokenProvider } from "../types";
+import { loadDefaultToken } from "./default-token-loader";
 import { createTokenProvider } from "../provider";
-import { getDefaultAzureCredentialToken } from "../default-credential";
+import type { AccessToken, TokenProvider } from "../types";
 
 export const storageOAuthScope = "https://storage.azure.com/.default";
 
@@ -78,8 +78,7 @@ export async function resolveAuthorizationHeader(input: ResolveAuthorizationInpu
       throw new Error("Unable to resolve a token from the configured credential");
     }
 
-    const tokenType = accessToken.tokenType === undefined ? "Bearer" : accessToken.tokenType;
-    return `${tokenType} ${accessToken.token}`;
+    return `${accessToken.tokenType} ${accessToken.token}`;
   }
 
   const provider = getTokenProvider({
@@ -121,7 +120,7 @@ function getTokenProvider(input: TokenProviderInput): TokenProvider {
   const provider = createTokenProvider({
     cache: new Map<string, AccessToken | Promise<AccessToken>>(),
     loadToken: async () => {
-      return getDefaultAzureCredentialToken({
+      return loadDefaultToken({
         scope: input.scopes.length === 1 ? input.scopes[0] : input.scopes,
         fetch: input.fetch,
         authorityHost: input.authorityHost,

@@ -17,15 +17,15 @@ export interface ServicePrincipalOptions {
 export async function getServicePrincipalToken(options: ServicePrincipalOptions): Promise<AccessToken> {
   const { tenantId, clientId, clientSecret, scope } = options;
 
-  if (tenantId == null || tenantId.length === 0) {
+  if (tenantId.length === 0) {
     throw new TypeError("tenantId is required");
   }
 
-  if (clientId == null || clientId.length === 0) {
+  if (clientId.length === 0) {
     throw new TypeError("clientId is required");
   }
 
-  if (clientSecret == null || clientSecret.length === 0) {
+  if (clientSecret.length === 0) {
     throw new TypeError("clientSecret is required");
   }
 
@@ -51,7 +51,7 @@ export async function getServicePrincipalToken(options: ServicePrincipalOptions)
     }),
   );
 
-  const payload = await fetchJson<unknown>(
+  const payload = await fetchJson(
     tokenUrl,
     {
       method: "POST",
@@ -61,7 +61,7 @@ export async function getServicePrincipalToken(options: ServicePrincipalOptions)
       body: form,
     },
     fetcher,
-  ).catch((error) => {
+  ).catch((error: unknown) => {
     if (error instanceof TokenRequestError) {
       throw error;
     }

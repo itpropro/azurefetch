@@ -7,8 +7,59 @@ export interface CommandExecutionOptions {
   env?: NodeJS.ProcessEnv;
 }
 
+interface ProcessLike {
+  env: Record<string, string | undefined>;
+  versions: {
+    node: string;
+  };
+}
+
+function isRecordOfString(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+type GlobalProcess = { process?: { versions?: unknown; env?: unknown } };
+
+function getProcess(): ProcessLike | undefined {
+  const globalProcess = (globalThis as GlobalProcess).process;
+  if (globalProcess == null || !isRecordOfString(globalProcess.versions) || !isRecordOfString(globalProcess.env)) {
+    return undefined;
+  }
+
+  const versions = globalProcess.versions;
+  if (!isRecordOfString(versions)) {
+    return undefined;
+  }
+
+  const version = versions.node;
+  if (typeof version !== "string") {
+    return undefined;
+  }
+
+  const env = globalProcess.env;
+  const processEnv: Record<string, string | undefined> = {};
+
+  if (isRecordOfString(env)) {
+    for (const [key, value] of Object.entries(env)) {
+      if (value == null || typeof value === "string") {
+        processEnv[key] = value;
+      }
+    }
+  }
+
+  const processLike: ProcessLike = {
+    env: processEnv,
+    versions: {
+      node: version,
+    },
+  };
+
+  return processLike;
+}
+
 function getProcessEnv(): NodeJS.ProcessEnv {
-  if (typeof process === "undefined" || process.env == null) {
+  const process = getProcess();
+  if (process == null) {
     return {};
   }
 
@@ -16,7 +67,8 @@ function getProcessEnv(): NodeJS.ProcessEnv {
 }
 
 export function hasCommandExecution(): boolean {
-  return typeof process !== "undefined" && process.versions?.node != null;
+  const process = getProcess();
+  return process != null && process.versions.node.length > 0;
 }
 
 export function isCommandUnavailable(error: unknown): boolean {
@@ -40,7 +92,7 @@ export async function executeCommand(
   const childProcess = await import("node:child_process");
   const { spawn } = childProcess;
 
-  return await new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const processEnv = getProcessEnv();
     const child = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
@@ -53,11 +105,11 @@ export async function executeCommand(
     let stdout = "";
     let stderr = "";
 
-    child.stdout?.on("data", (chunk) => {
+    child.stdout.on("data", (chunk) => {
       stdout += String(chunk);
     });
 
-    child.stderr?.on("data", (chunk) => {
+    child.stderr.on("data", (chunk) => {
       stderr += String(chunk);
     });
 

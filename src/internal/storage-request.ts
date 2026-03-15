@@ -1,13 +1,10 @@
+import { encodeUtf8 } from "./storage-encoding";
+
 export const storageServiceVersion = "2024-11-04";
 
 export interface BlobSharedKeyCredential {
   readonly accountName: string;
-  computeHMACSHA256(stringToSign: string): string;
-}
-
-export interface TableSharedKeyLiteCredential {
-  readonly accountName: string;
-  readonly accountKey: string;
+  computeHMACSHA256(stringToSign: string): Promise<string>;
 }
 
 export function addQueryParameters(url: URL, query?: Record<string, string>): void {
@@ -36,7 +33,7 @@ export function getKnownBodyLength(body: BodyInit | null | undefined): number | 
   }
 
   if (typeof body === "string") {
-    return new TextEncoder().encode(body).byteLength;
+    return encodeUtf8(body).byteLength;
   }
 
   if (body instanceof ArrayBuffer) {
@@ -61,14 +58,14 @@ export function setKnownContentLength(headers: Headers, body: BodyInit | null | 
   }
 }
 
-export function applyBlobSharedKeyAuth(
+export async function applyBlobSharedKeyAuth(
   method: string,
   url: URL,
   headers: Headers,
   credential: BlobSharedKeyCredential,
-): string {
+): Promise<string> {
   const stringToSign = buildBlobStringToSign(method, url, headers, credential.accountName);
-  const signature = credential.computeHMACSHA256(stringToSign);
+  const signature = await credential.computeHMACSHA256(stringToSign);
   return `SharedKey ${credential.accountName}:${signature}`;
 }
 
@@ -76,10 +73,10 @@ export async function applyTableSharedKeyLiteAuth(
   method: string,
   url: URL,
   headers: Headers,
-  credential: TableSharedKeyLiteCredential,
+  credential: BlobSharedKeyCredential,
 ): Promise<string> {
   const stringToSign = buildTableStringToSign(credential.accountName, url, headers);
-  const signature = await computeSharedKeyLiteSignature(credential.accountKey, stringToSign);
+  const signature = await credential.computeHMACSHA256(stringToSign);
   return `SharedKeyLite ${credential.accountName}:${signature}`;
 }
 
@@ -140,9 +137,7 @@ function buildBlobCanonicalizedResource(url: URL, accountName: string): string {
   const queryParameters: Record<string, string[]> = {};
   for (const [name, value] of url.searchParams.entries()) {
     const lowerName = name.toLowerCase();
-    if (!queryParameters[lowerName]) {
-      queryParameters[lowerName] = [];
-    }
+    queryParameters[lowerName] ??= [];
 
     queryParameters[lowerName].push(value);
   }
@@ -174,45 +169,4 @@ function buildTableCanonicalizedResource(url: URL, accountName: string): string 
   }
 
   return `${canonicalizedResource}?comp=${comp}`;
-}
-
-async function computeSharedKeyLiteSignature(accountKey: string, stringToSign: string): Promise<string> {
-  const subtle = globalThis.crypto?.subtle;
-  if (subtle == null) {
-    throw new Error("Web Crypto API is required for SharedKeyLite signing");
-  }
-
-  const keyBytes = decodeBase64ToBytes(accountKey);
-  const cryptoKey = await subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const signature = await subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(stringToSign));
-  return encodeBytesToBase64(signature);
-}
-
-function decodeBase64ToBytes(base64: string): Uint8Array {
-  if (typeof globalThis.atob !== "function") {
-    throw new Error("atob is required to decode shared key values");
-  }
-
-  const binary = globalThis.atob(base64);
-  const bytes = new Uint8Array(binary.length);
-
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-
-  return bytes;
-}
-
-function encodeBytesToBase64(bytes: ArrayBuffer | ArrayBufferView): string {
-  if (typeof globalThis.btoa !== "function") {
-    throw new Error("btoa is required to encode shared key signatures");
-  }
-
-  const signatureBytes = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  let binary = "";
-  for (const byte of signatureBytes) {
-    binary += String.fromCharCode(byte);
-  }
-
-  return globalThis.btoa(binary);
 }

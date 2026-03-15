@@ -3,14 +3,49 @@ import { describe, expect, test, vi } from "vitest";
 import {
   AccountSASPermissions,
   BlobServiceClient,
-  DefaultAzureCredential,
   getAccountNameFromUrl,
   BlobBatch,
   BlobBatchClient,
   StorageSharedKeyCredential,
 } from "../src/blob";
+import { DefaultAzureCredential } from "../src/default-azure-credential";
 import { createFetchMock, textResponse } from "./helpers";
 import * as defaultCredential from "../src/default-credential";
+
+describe("StorageSharedKeyCredential", () => {
+  test("uses Web Crypto signing and caches the imported key", async () => {
+    const cryptoKey = {} as CryptoKey;
+    const importKey = vi.fn(async () => cryptoKey);
+    const sign = vi.fn(async (_algorithm: AlgorithmIdentifier, key: CryptoKey, data: BufferSource) => {
+      expect(key).toBe(cryptoKey);
+      expect(new TextDecoder().decode(data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer))).toBe(
+        "string-to-sign",
+      );
+      return new Uint8Array([1, 2, 3]);
+    });
+
+    vi.stubGlobal("crypto", {
+      subtle: {
+        importKey,
+        sign,
+      } as unknown as SubtleCrypto,
+    } as Crypto);
+
+    try {
+      const credential = new StorageSharedKeyCredential("myaccount", "AQID");
+
+      const first = await credential.computeHMACSHA256("string-to-sign");
+      const second = await credential.computeHMACSHA256("string-to-sign");
+
+      expect(first).toBe("AQID");
+      expect(second).toBe("AQID");
+      expect(importKey).toHaveBeenCalledTimes(1);
+      expect(sign).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 describe("AccountSASPermissions", () => {
   test("parses and serializes permission sets", () => {

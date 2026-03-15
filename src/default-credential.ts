@@ -1,5 +1,6 @@
 import { TokenUnavailableError, TokenRequestError } from "./errors";
 import { getEnvironment, getEnv } from "./internal/env";
+import { resolveRequiredScopes } from "./internal/request-core";
 import { executeCommand, hasCommandExecution, isCommandUnavailable } from "./internal/process";
 import { parseNumericTimestamp } from "./internal/oauth";
 import { getManagedIdentityToken } from "./managed-identity";
@@ -21,18 +22,18 @@ interface ExternalCommandTokenPayload {
 }
 
 export async function getDefaultAzureCredentialToken(options: DefaultAzureCredentialOptions): Promise<AccessToken> {
-  const scopes = normalizeScopes(options.scope);
+  const scopes = resolveRequiredScopes(options.scope);
   const environment = getEnvironment();
 
   const singleScope = scopes.length === 1 ? scopes[0] : undefined;
-  const singleDefaultScope = singleScope != null && singleScope.endsWith("/.default") ? singleScope : undefined;
+  const singleDefaultScope = singleScope?.endsWith("/.default") === true ? singleScope : undefined;
 
   const tenantId = getEnv(environment, "AZURE_TENANT_ID");
   const clientId = getEnv(environment, "AZURE_CLIENT_ID");
   const clientSecret = getEnv(environment, "AZURE_CLIENT_SECRET");
 
   if (tenantId != null && clientId != null && clientSecret != null) {
-    const servicePrincipalToken = await tryAcquireToken(tenantId, () =>
+    const servicePrincipalToken = await tryAcquireToken(tenantId, async () =>
       getServicePrincipalToken({
         tenantId,
         clientId,
@@ -48,7 +49,7 @@ export async function getDefaultAzureCredentialToken(options: DefaultAzureCreden
     }
   }
 
-  const managedIdentityToken = await tryAcquireToken(singleDefaultScope, () =>
+  const managedIdentityToken = await tryAcquireToken(singleDefaultScope, async () =>
     getManagedIdentityToken({
       scope: singleDefaultScope!,
       fetch: options.fetch,
@@ -60,7 +61,7 @@ export async function getDefaultAzureCredentialToken(options: DefaultAzureCreden
     return managedIdentityToken;
   }
 
-  const cliToken = await tryAcquireToken("azure cli", () =>
+  const cliToken = await tryAcquireToken("azure cli", async () =>
     getAzureCliToken(scopes, {
       commandRunner: executeCommand,
     }),
@@ -70,7 +71,7 @@ export async function getDefaultAzureCredentialToken(options: DefaultAzureCreden
     return cliToken;
   }
 
-  const powershellToken = await tryAcquireToken("azure powershell", () =>
+  const powershellToken = await tryAcquireToken("azure powershell", async () =>
     getAzurePowerShellToken(scopes, {
       commandRunner: executeCommand,
     }),
@@ -90,22 +91,6 @@ export async function getDefaultAzureCredentialToken(options: DefaultAzureCreden
   throw new TokenUnavailableError(`Could not find available credentials: ${failures.join(", ")}`);
 }
 
-function normalizeScopes(scope: string | string[]): string[] {
-  const values = Array.isArray(scope) ? scope : [scope];
-
-  if (values.length === 0) {
-    throw new TypeError("At least one non-empty scope is required");
-  }
-
-  const scopes = values.map((value) => value.trim()).filter((value) => value.length > 0);
-
-  if (scopes.length === 0) {
-    throw new TypeError("At least one non-empty scope is required");
-  }
-
-  return scopes;
-}
-
 function tryGetResourceFromScope(scope: string): string {
   if (!scope.endsWith("/.default")) {
     return scope;
@@ -121,7 +106,7 @@ async function tryAcquireToken<T>(shouldTry: unknown, acquire: () => Promise<T>)
 
   try {
     return await acquire();
-  } catch (error) {
+  } catch (error: unknown) {
     if (error instanceof TokenUnavailableError) {
       return undefined;
     }
@@ -146,7 +131,7 @@ async function getAzureCliToken(
   let result: { stdout: string; stderr: string };
   try {
     result = await options.commandRunner(command, args);
-  } catch (error) {
+  } catch (error: unknown) {
     if (isCommandUnavailable(error) || error instanceof TokenUnavailableError) {
       throw new TokenUnavailableError("Azure CLI is unavailable", error);
     }
@@ -200,7 +185,7 @@ async function getAzurePowerShellToken(
       ]);
 
       return normalizeCommandToken(parseJsonOutput(result.stdout));
-    } catch (error) {
+    } catch (error: unknown) {
       lastError = error;
 
       if (!isCommandUnavailable(error)) {

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { AzureClient } from "../src/client";
-import { DefaultAzureCredential, BlobServiceClient } from "../src/blob";
+import { BlobServiceClient } from "../src/blob";
+import { DefaultAzureCredential } from "../src/default-azure-credential";
 import { TableServiceClient } from "../src/table";
 import * as defaultCredential from "../src/default-credential";
 import { textResponse } from "./helpers";
@@ -64,7 +65,9 @@ describe("AzureClient", () => {
       expiresOnTimestamp: Date.now() + 60_000,
     });
 
-    const request = await new AzureClient({
+    const { AzureClient: NodeAzureClient } = await import("../src/node");
+
+    const request = await new NodeAzureClient({
       scope: "https://storage.azure.com/.default",
       authorityHost: "https://login.default.test",
     }).sign("https://example.com", {

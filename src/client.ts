@@ -29,7 +29,7 @@ export class AzureClient {
   private readonly defaultTokenProviders = new Map<string, TokenProvider>();
 
   constructor(options: AzureClientOptions = {}) {
-    this.fetcher = options.fetch || globalThis.fetch;
+    this.fetcher = options.fetch ?? globalThis.fetch;
     this.defaultCredential = options.credential;
     this.defaultScope = options.scope;
     this.defaultAuthorityHost = options.authorityHost;

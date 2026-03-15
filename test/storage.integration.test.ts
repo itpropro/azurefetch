@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 
-import { BlobServiceClient, DefaultAzureCredential, TableServiceClient } from "../src";
+import { BlobServiceClient } from "../src/blob";
+import { DefaultAzureCredential } from "../src/node";
+import { TableServiceClient } from "../src/table";
 
 type TestConfig =
   | {

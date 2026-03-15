@@ -1,6 +1,5 @@
-import { createHmac } from "node:crypto";
-
-import { DefaultAzureCredential } from "./default-azure-credential";
+import { StorageSharedKeyCredential } from "./storage-shared-key-credential";
+import { getAccountNameFromUrl } from "./internal/storage-url";
 import { storageOAuthScope } from "./internal/request-core";
 import {
   applyBlobSharedKeyAuth,
@@ -14,7 +13,11 @@ interface BlobClientOptions {
   fetch?: typeof globalThis.fetch;
 }
 
-type CredentialLike = DefaultAzureCredential | StorageSharedKeyCredential | undefined;
+interface AuthorizationCredential {
+  getAuthorizationHeader(scopes?: string | string[]): Promise<string>;
+}
+
+type CredentialLike = AuthorizationCredential | StorageSharedKeyCredential | undefined;
 
 interface BlobOperationOptions {
   headers?: HeadersInit;
@@ -105,32 +108,8 @@ export interface ContainerCreateIfNotExistsResponse {
   succeeded: boolean;
 }
 
-export { DefaultAzureCredential } from "./default-azure-credential";
-
-export class StorageSharedKeyCredential {
-  public readonly accountKey: string;
-  private readonly accountKeyBytes: Buffer;
-
-  constructor(
-    public readonly accountName: string,
-    accountKey: string,
-  ) {
-    if (accountName.length === 0) {
-      throw new TypeError("accountName is required");
-    }
-
-    if (accountKey.length === 0) {
-      throw new TypeError("accountKey is required");
-    }
-
-    this.accountKey = accountKey;
-    this.accountKeyBytes = Buffer.from(accountKey, "base64");
-  }
-
-  public computeHMACSHA256(stringToSign: string): string {
-    return createHmac("sha256", this.accountKeyBytes).update(stringToSign, "utf8").digest("base64");
-  }
-}
+export { StorageSharedKeyCredential } from "./storage-shared-key-credential";
+export { getAccountNameFromUrl } from "./internal/storage-url";
 
 export class AccountSASPermissions {
   public read = false;
@@ -271,7 +250,7 @@ export class BlobServiceClient {
     this.url = parsed;
     this.accountName = accountName;
     this.credential = credential;
-    this.fetcher = options?.fetch || globalThis.fetch;
+    this.fetcher = options?.fetch ?? globalThis.fetch;
 
     if (credential instanceof StorageSharedKeyCredential && accountName.length === 0) {
       throw new Error("Unable to extract accountName from provided URL for StorageSharedKeyCredential");
@@ -281,11 +260,12 @@ export class BlobServiceClient {
   public static fromConnectionString(connectionString: string, options?: BlobClientOptions): BlobServiceClient {
     const parsed = parseConnectionString(connectionString);
     if (parsed.kind === "AccountConnString") {
-      return new BlobServiceClient(
-        parsed.url,
-        new StorageSharedKeyCredential(parsed.accountName, parsed.accountKey || ""),
-        options,
-      );
+      const accountKey = parsed.accountKey;
+      if (accountKey == null) {
+        throw new Error("Invalid AccountKey in the provided Connection String");
+      }
+
+      return new BlobServiceClient(parsed.url, new StorageSharedKeyCredential(parsed.accountName, accountKey), options);
     }
 
     const separator = parsed.url.includes("?") ? "&" : "?";
@@ -347,7 +327,7 @@ export class BlobServiceClient {
     applyStorageDateAndVersionHeaders(headers);
     setKnownContentLength(headers, options.body);
 
-    if (this.credential instanceof DefaultAzureCredential) {
+    if (hasAuthorizationCredential(this.credential)) {
       const authHeader = await this.credential.getAuthorizationHeader(storageOAuthScope);
       headers.set("Authorization", authHeader);
     } else if (this.credential instanceof StorageSharedKeyCredential) {
@@ -355,7 +335,7 @@ export class BlobServiceClient {
         throw new Error("Unable to extract accountName from URL for shared key signing");
       }
 
-      headers.set("Authorization", applyBlobSharedKeyAuth(method, url, headers, this.credential));
+      headers.set("Authorization", await applyBlobSharedKeyAuth(method, url, headers, this.credential));
     }
 
     const response = await this.fetcher(url.toString(), {
@@ -370,8 +350,9 @@ export class BlobServiceClient {
   private async *listContainersByPage(options?: QueryOptions): AsyncGenerator<ListContainersSegment> {
     let continuationToken = options?.continuationToken;
     const maxPageSize = options?.maxPageSize;
+    let hasMore = true;
 
-    while (true) {
+    while (hasMore) {
       const response = await this.request("GET", this.url, {
         query: {
           comp: "list",
@@ -396,8 +377,9 @@ export class BlobServiceClient {
         nextMarker,
       };
 
-      if (!nextMarker) {
-        break;
+      if (nextMarker.length === 0) {
+        hasMore = false;
+        continue;
       }
 
       continuationToken = nextMarker;
@@ -406,11 +388,15 @@ export class BlobServiceClient {
 }
 
 export class ContainerClient {
+  private readonly service: BlobServiceClientProxy;
+
   constructor(
     public readonly url: string,
     private readonly credential: CredentialLike,
     private readonly fetcher: typeof globalThis.fetch,
-  ) {}
+  ) {
+    this.service = new BlobServiceClientProxy(url, credential, fetcher);
+  }
 
   public getBlockBlobClient(blobName: string): BlockBlobClient {
     const blobUrl = appendToURLPath(this.url, encodeBlobName(blobName));
@@ -480,8 +466,9 @@ export class ContainerClient {
   private async *listBlobsFlatByPage(options?: QueryOptions): AsyncGenerator<ListBlobsFlatSegment> {
     let continuationToken = options?.continuationToken;
     const maxPageSize = options?.maxPageSize;
+    let hasMore = true;
 
-    while (true) {
+    while (hasMore) {
       const response = await this.request("GET", this.url, {
         query: {
           comp: "list",
@@ -507,8 +494,9 @@ export class ContainerClient {
         nextMarker,
       };
 
-      if (!nextMarker) {
-        break;
+      if (nextMarker.length === 0) {
+        hasMore = false;
+        continue;
       }
 
       continuationToken = nextMarker;
@@ -523,8 +511,7 @@ export class ContainerClient {
     const url = new URL(targetUrl);
     addQueryParameters(url, options.query);
 
-    const service = new BlobServiceClientProxy(this.url, this.credential, this.fetcher);
-    return service.request(method, url.toString());
+    return this.service.request(method, url.toString());
   }
 }
 
@@ -613,6 +600,7 @@ export class BlobBatch {
 
 export class BlobBatchClient {
   private readonly serviceUrl: string;
+  private readonly service: BlobServiceClientProxy;
 
   constructor(
     private readonly url: string,
@@ -620,6 +608,7 @@ export class BlobBatchClient {
     private readonly fetcher: typeof globalThis.fetch,
   ) {
     this.serviceUrl = validateUrl(url);
+    this.service = new BlobServiceClientProxy(this.serviceUrl, credential, fetcher);
   }
 
   public createBatch(): BlobBatch {
@@ -634,16 +623,12 @@ export class BlobBatchClient {
     const batchUrl = new URL(this.serviceUrl);
     batchUrl.searchParams.set("comp", "batch");
 
-    const response = await new BlobServiceClientProxy(this.serviceUrl, this.credential, this.fetcher).request(
-      "POST",
-      batchUrl,
-      {
-        headers: {
-          "Content-Type": batch.getMultiPartContentType(),
-        },
-        body: batch.getHttpRequestBody(),
+    const response = await this.service.request("POST", batchUrl, {
+      headers: {
+        "Content-Type": batch.getMultiPartContentType(),
       },
-    );
+      body: batch.getHttpRequestBody(),
+    });
 
     if (!response.ok || response.status !== 202) {
       const body = await response.text();
@@ -665,11 +650,15 @@ export class BlobBatchClient {
 }
 
 export class BlockBlobClient {
+  private readonly service: BlobServiceClientProxy;
+
   constructor(
     public readonly url: string,
     private readonly credential: CredentialLike,
     private readonly fetcher: typeof globalThis.fetch,
-  ) {}
+  ) {
+    this.service = new BlobServiceClientProxy(url, credential, fetcher);
+  }
 
   public async upload(body: string | ArrayBuffer | ArrayBufferView | Blob, _contentLength?: number): Promise<Response> {
     const requestBody = normalizeUploadBody(body);
@@ -768,8 +757,7 @@ export class BlockBlobClient {
 
   private async request(method: string, targetUrl: string, options: BlobOperationOptions = {}): Promise<Response> {
     const headers = new Headers(options.headers ?? {});
-    const service = new BlobServiceClientProxy(this.url, this.credential, this.fetcher);
-    return service.request(method, targetUrl, {
+    return this.service.request(method, targetUrl, {
       headers,
       body: options.body,
     });
@@ -793,14 +781,14 @@ class BlobServiceClientProxy {
     applyStorageDateAndVersionHeaders(headers);
     setKnownContentLength(headers, options.body);
 
-    if (this.credential instanceof DefaultAzureCredential) {
+    if (hasAuthorizationCredential(this.credential)) {
       headers.set("Authorization", await this.credential.getAuthorizationHeader(storageOAuthScope));
     } else if (this.credential instanceof StorageSharedKeyCredential) {
       if (!this.accountName) {
         throw new Error("Unable to extract accountName from URL for shared key signing");
       }
 
-      headers.set("Authorization", applyBlobSharedKeyAuth(method, url, headers, this.credential));
+      headers.set("Authorization", await applyBlobSharedKeyAuth(method, url, headers, this.credential));
     }
 
     return this.fetcher(url, {
@@ -855,7 +843,9 @@ function parseConnectionString(connectionString: string): ParsedConnectionString
   const defaultProtocol = parts.DefaultEndpointsProtocol?.toLowerCase();
   const endpointSuffix = parts.EndpointSuffix;
   const accountSas = parts.SharedAccessSignature;
-  const accountName = parts.AccountName || (blobEndpoint ? getAccountNameFromUrl(blobEndpoint) : "");
+  const accountNameFromEndpoint = blobEndpoint == null ? undefined : getAccountNameFromUrl(blobEndpoint);
+  const accountName =
+    parts.AccountName == null || parts.AccountName.length === 0 ? accountNameFromEndpoint : parts.AccountName;
 
   if (defaultProtocol != null && accountKey != null) {
     const protocol = defaultProtocol;
@@ -865,20 +855,20 @@ function parseConnectionString(connectionString: string): ParsedConnectionString
       );
     }
 
-    if (!endpointSuffix && !blobEndpoint) {
+    if ((endpointSuffix == null || endpointSuffix.length === 0) && blobEndpoint == null) {
       throw new Error("Invalid EndpointSuffix in the provided Connection String");
     }
 
-    const endpoint = blobEndpoint || `${protocol}://${accountName}.blob.${endpointSuffix}`;
-    if (!endpoint) {
+    const endpoint = blobEndpoint ?? `${protocol}://${accountName}.blob.${endpointSuffix}`;
+    if (endpoint.length === 0) {
       throw new Error("Invalid BlobEndpoint in the provided Connection String");
     }
 
-    if (!accountName) {
+    if (accountName == null || accountName.length === 0) {
       throw new Error("Invalid AccountName in the provided Connection String");
     }
 
-    if (Buffer.from(accountKey, "base64").length === 0) {
+    if (accountKey.length === 0) {
       throw new Error("Invalid AccountKey in the provided Connection String");
     }
 
@@ -891,11 +881,11 @@ function parseConnectionString(connectionString: string): ParsedConnectionString
   }
 
   if (accountSas != null) {
-    if (!blobEndpoint) {
+    if (blobEndpoint == null || blobEndpoint.length === 0) {
       throw new Error("Invalid BlobEndpoint in the provided SAS Connection String");
     }
 
-    if (!accountName) {
+    if (accountName == null || accountName.length === 0) {
       throw new Error("Invalid AccountName in the provided SAS Connection String");
     }
 
@@ -934,7 +924,7 @@ function appendToURLPath(baseUrl: string, path: string): string {
 }
 
 function parseListBlobsFlatXml(xml: string): ListBlobsFlatSegment {
-  const nextMarker = extractFirst(xml, /<NextMarker>([\s\S]*?)<\/NextMarker>/)?.trim() || "";
+  const nextMarker = extractFirst(xml, /<NextMarker>([\s\S]*?)<\/NextMarker>/)?.trim() ?? "";
   const segment: BlobItem[] = [];
 
   const blobPattern = /<Blob>([\s\S]*?)<\/Blob>/g;
@@ -954,7 +944,7 @@ function parseListBlobsFlatXml(xml: string): ListBlobsFlatSegment {
 }
 
 function parseListContainersXml(xml: string): ListContainersSegment {
-  const nextMarker = extractFirst(xml, /<NextMarker>([\s\S]*?)<\/NextMarker>/)?.trim() || "";
+  const nextMarker = extractFirst(xml, /<NextMarker>([\s\S]*?)<\/NextMarker>/)?.trim() ?? "";
   const segment: ContainerItem[] = [];
 
   const containerPattern = /<Container>([\s\S]*?)<\/Container>/g;
@@ -1010,11 +1000,9 @@ async function addAuthenticationHeadersForSubRequest(
     return;
   }
 
-  if (headers["x-ms-date"] == null) {
-    headers["x-ms-date"] = new Date().toUTCString();
-  }
+  headers["x-ms-date"] ??= new Date().toUTCString();
 
-  if (credential instanceof DefaultAzureCredential) {
+  if (hasAuthorizationCredential(credential)) {
     headers.Authorization = await credential.getAuthorizationHeader(storageOAuthScope);
     return;
   }
@@ -1029,11 +1017,15 @@ async function addAuthenticationHeadersForSubRequest(
     const requestHeaders = new Headers(headers);
     const signingCredential = {
       accountName,
-      computeHMACSHA256: (stringToSign: string) => credential.computeHMACSHA256(stringToSign),
+      computeHMACSHA256: async (stringToSign: string) => credential.computeHMACSHA256(stringToSign),
     };
 
-    headers.Authorization = applyBlobSharedKeyAuth(method, url, requestHeaders, signingCredential);
+    headers.Authorization = await applyBlobSharedKeyAuth(method, url, requestHeaders, signingCredential);
   }
+}
+
+function hasAuthorizationCredential(credential: CredentialLike): credential is AuthorizationCredential {
+  return credential != null && typeof credential.getAuthorizationHeader === "function";
 }
 
 function getBoundaryFromContentType(contentType: string | null): string {
@@ -1115,7 +1107,7 @@ async function parseBlobBatchResponse(
         if (line.startsWith("HTTP/1.1")) {
           headerStartFound = true;
           const statusTokens = line.split(" ");
-          const status = Number.parseInt(statusTokens[1] || "", 10);
+          const status = Number.parseInt(statusTokens[1] ?? "", 10);
           parsed.status = Number.isNaN(status) ? 0 : status;
           parsed.statusMessage = statusTokens.slice(2).join(" ");
         }
@@ -1130,9 +1122,6 @@ async function parseBlobBatchResponse(
 
       if (!headerEndFound) {
         const { name, value } = parseHeaderLine(line);
-        if (!parsed.headers) {
-          parsed.headers = {};
-        }
         parsed.headers[name] = value;
         if (name.toLowerCase() === "x-ms-error-code") {
           parsed.errorCode = value;
@@ -1141,7 +1130,7 @@ async function parseBlobBatchResponse(
       }
 
       if (line.length > 0) {
-        parsed.bodyAsText = `${parsed.bodyAsText || ""}${line}`;
+        parsed.bodyAsText = `${parsed.bodyAsText ?? ""}${line}`;
       }
     }
 
@@ -1154,16 +1143,12 @@ async function parseBlobBatchResponse(
       }
     }
 
-    let mapped = parsed as BlobBatchSubResponse;
+    const mapped = parsed;
     if (Number.isInteger(contentId) && contentId >= 0 && contentId < subRequests.size) {
-      mapped = {
+      subResponses[contentId] ??= {
         ...parsed,
         _request: subRequests.get(contentId),
       };
-
-      if (subResponses[contentId] == null) {
-        subResponses[contentId] = mapped;
-      }
     } else {
       subResponses.push(mapped);
     }
@@ -1192,25 +1177,4 @@ function decodeXml(value: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
     .replace(/&amp;/g, "&");
-}
-
-export function getAccountNameFromUrl(url: string): string {
-  const parsedUrl = new URL(url);
-  const hostParts = parsedUrl.hostname.split(".");
-
-  if (hostParts[1] === "blob" || hostParts[1] === "table") {
-    return hostParts[0] || "";
-  }
-
-  if (isIpEndpointStyle(parsedUrl)) {
-    return parsedUrl.pathname.split("/").filter(Boolean)[0] ?? "";
-  }
-
-  return "";
-}
-
-function isIpEndpointStyle(parsedUrl: URL): boolean {
-  const host = parsedUrl.hostname;
-
-  return host === "localhost" || host === "host.docker.internal" || /^(\d{1,3}\.){3}\d{1,3}$/.test(host);
 }
