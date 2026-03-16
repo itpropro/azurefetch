@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.1.0
+
+[compare changes](https://github.com/itpropro/azurefetch/compare/v0.0.2...v0.1.0)
+
+### 🚀 Enhancements
+
+- **core:** ⚠️ Move default credentials to root export ([5ff0f1a](https://github.com/itpropro/azurefetch/commit/5ff0f1a))
+
+#### ⚠️ Breaking Changes
+
+- **core:** ⚠️ Move default credentials to root export ([5ff0f1a](https://github.com/itpropro/azurefetch/commit/5ff0f1a))
+
+### ❤️ Contributors
+
+- Jan-Henrik Damaschke ([@itpropro](https://github.com/itpropro))
+
 ## v0.0.2
 
 ### 🚀 Enhancements
