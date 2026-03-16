@@ -5,7 +5,7 @@
 
 Fetch-first Azure utilities for modern runtimes.
 
-`azurefetch` keeps the Azure surface small, explicit, and easy to use. It focuses on precise implementations that work well in workers, browsers, Bun, Deno, and Node without pulling in a large dependency graph.
+`azurefetch` is a no dependency fetch focused library to interact with azure resources, mainly storage and config related resources like key vault and app config. It focuses on an implementation that works well in workers, browsers, Bun, Deno, and Node without pulling in a large dependency graph and makes interacting with basic Azure resources easier.
 
 ## Why azurefetch?
 
@@ -219,44 +219,6 @@ const token = await getDefaultAzureCredentialToken({
 | Entry point            | Purpose                                                                                                                             |
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `@itpropro/azurefetch` | Main public API: fetch helpers, Blob, Table, Key Vault, App Configuration, shared credentials, and default Azure credential helpers |
-
-## Manual App Configuration integration test
-
-The App Configuration live test is opt-in and reuses the existing service principal environment variables.
-
-Required:
-
-- `AZUREFETCH_RUN_APP_CONFIGURATION_TESTS=1`
-- `AZURE_TENANT_ID`
-- `AZURE_CLIENT_ID`
-- `AZURE_CLIENT_SECRET`
-- either `AZUREFETCH_APP_CONFIGURATION_ENDPOINT` or `AZUREFETCH_APP_CONFIGURATION_NAME`
-
-Optional:
-
-- `AZUREFETCH_APP_CONFIGURATION_ENDPOINT_SUFFIX` (defaults to `azconfig.io`)
-
-Using a full endpoint:
-
-```bash
-AZUREFETCH_RUN_APP_CONFIGURATION_TESTS=1 \
-AZURE_TENANT_ID=<tenant-id> \
-AZURE_CLIENT_ID=<client-id> \
-AZURE_CLIENT_SECRET=<client-secret> \
-AZUREFETCH_APP_CONFIGURATION_ENDPOINT=https://<store>.azconfig.io \
-bun run test:app-configuration
-```
-
-Using a store name:
-
-```bash
-AZUREFETCH_RUN_APP_CONFIGURATION_TESTS=1 \
-AZURE_TENANT_ID=<tenant-id> \
-AZURE_CLIENT_ID=<client-id> \
-AZURE_CLIENT_SECRET=<client-secret> \
-AZUREFETCH_APP_CONFIGURATION_NAME=<store> \
-bun run test:app-configuration
-```
 
 ## License
 

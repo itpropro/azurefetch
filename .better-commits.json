@@ -1,0 +1,58 @@
+{
+  "commit_scope": {
+    "enable": true,
+    "custom_scope": false,
+    "initial_value": "core",
+    "max_items": 20,
+    "options": [
+      {
+        "value": "build",
+        "label": "build"
+      },
+      {
+        "value": "ci",
+        "label": "ci"
+      },
+      {
+        "value": "config",
+        "label": "config"
+      },
+      {
+        "value": "core",
+        "label": "core"
+      },
+      {
+        "value": "deps",
+        "label": "deps"
+      },
+      {
+        "value": "docs",
+        "label": "docs"
+      },
+      {
+        "value": "managed-identity",
+        "label": "managed-identity"
+      },
+      {
+        "value": "provider",
+        "label": "provider"
+      },
+      {
+        "value": "readme",
+        "label": "readme"
+      },
+      {
+        "value": "release",
+        "label": "release"
+      },
+      {
+        "value": "service-principal",
+        "label": "service-principal"
+      },
+      {
+        "value": "tests",
+        "label": "tests"
+      }
+    ]
+  }
+}

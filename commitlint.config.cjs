@@ -14,6 +14,7 @@ module.exports = {
         "docs",
         "managed-identity",
         "provider",
+        "readme",
         "release",
         "service-principal",
         "tests",
