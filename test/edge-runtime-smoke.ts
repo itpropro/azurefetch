@@ -1,14 +1,12 @@
 import { readFile } from "node:fs/promises";
 
 const rootBundleUrl = new URL("../dist/index.mjs", import.meta.url);
-const blobBundleUrl = new URL("../dist/blob.mjs", import.meta.url);
-const keyVaultBundleUrl = new URL("../dist/keyvault-secrets.mjs", import.meta.url);
-const tableBundleUrl = new URL("../dist/table.mjs", import.meta.url);
+const nodeBundleUrl = new URL("../dist/node.mjs", import.meta.url);
 
 await assertNoNodeBuiltinLeakage();
 await assertRootBundleImportsWithoutNodeGlobals();
-await assertBlobAndTableBundlesSupportEdgeSafeAuthPaths();
-await assertKeyVaultBundleSupportsEdgeSafeAuthPaths();
+await assertRootBundleSupportsEdgeSafeServiceClients();
+await assertNodeBundleExportsNodeHelpers();
 
 async function assertNoNodeBuiltinLeakage(): Promise<void> {
   const bundle = await readFile(rootBundleUrl, "utf8");
@@ -23,110 +21,88 @@ async function assertRootBundleImportsWithoutNodeGlobals(): Promise<void> {
   await withNodeGlobalsDisabled(async () => {
     const rootModule = (await import(`${rootBundleUrl.href}?edge-smoke=${Date.now()}`)) as Record<string, unknown>;
 
-    for (const requiredExport of ["AzureClient", "downloadText", "uploadText"]) {
+    for (const requiredExport of [
+      "AzureClient",
+      "BlobServiceClient",
+      "TableServiceClient",
+      "KeyVaultSecretClient",
+      "AppConfigurationClient",
+      "StorageSharedKeyCredential",
+      "downloadText",
+      "uploadText",
+    ]) {
       if (!(requiredExport in rootModule)) {
         throw new Error(`Expected ${requiredExport} to remain available from the root bundle`);
       }
     }
 
-    for (const forbiddenExport of [
-      "AccountSASPermissions",
-      "BlobBatch",
-      "BlobBatchClient",
-      "BlobServiceClient",
-      "ContainerClient",
-      "KeyVaultSecretClient",
-      "StorageSharedKeyCredential",
-      "TableClient",
-      "TableServiceClient",
-      "getAccountNameFromUrl",
-    ]) {
+    for (const forbiddenExport of ["DefaultAzureCredential", "getDefaultAzureCredentialToken"]) {
       if (forbiddenExport in rootModule) {
-        throw new Error(`Root bundle should not expose ${forbiddenExport}; use an explicit subpath import instead`);
+        throw new Error(`Root bundle should not expose ${forbiddenExport}; use azurefetch/node instead`);
       }
     }
   });
 }
 
-async function assertKeyVaultBundleSupportsEdgeSafeAuthPaths(): Promise<void> {
+async function assertRootBundleSupportsEdgeSafeServiceClients(): Promise<void> {
   await withNodeGlobalsDisabled(async () => {
-    const { KeyVaultSecretClient } = (await import(`${keyVaultBundleUrl.href}?edge-smoke=${Date.now()}`)) as {
-      KeyVaultSecretClient: typeof import("../src/keyvault-secrets").KeyVaultSecretClient;
-    };
-
-    const requests: Array<{ url: string; headers: Headers }> = [];
-    const fetcher: typeof globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      const requestHeaders = input instanceof Request ? input.headers : new Headers(init.headers);
-      requests.push({
-        url: typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url,
-        headers: new Headers(requestHeaders),
-      });
-      return new Response(
-        JSON.stringify({
-          id: "https://example.vault.azure.net/secrets/edge-secret/version-1",
-          value: "edge-value",
-          attributes: {},
-        }),
-        {
-          status: 200,
-          statusText: "OK",
-          headers: { "content-type": "application/json" },
-        },
-      );
-    };
-
-    const client = new KeyVaultSecretClient(
-      "https://example.vault.azure.net",
-      { getAuthorizationHeader: async () => "Bearer edge-token" },
-      { fetch: fetcher },
-    );
-
-    const secret = await client.getSecret("edge-secret");
-
-    if (secret.value !== "edge-value") {
-      throw new Error("Expected Key Vault secret value to round-trip in edge smoke test");
-    }
-
-    if (requests.length !== 1) {
-      throw new Error(`Expected 1 Key Vault request, received ${requests.length}`);
-    }
-
-    const request = requests[0];
-    if (request.url !== "https://example.vault.azure.net/secrets/edge-secret/?api-version=7.6") {
-      throw new Error(`Unexpected Key Vault request URL ${request.url}`);
-    }
-
-    if (request.headers.get("Authorization") !== "Bearer edge-token") {
-      throw new Error("Expected bearer auth header for Key Vault edge smoke request");
-    }
-  });
-}
-
-async function assertBlobAndTableBundlesSupportEdgeSafeAuthPaths(): Promise<void> {
-  await withNodeGlobalsDisabled(async () => {
-    const { BlobServiceClient } = (await import(`${blobBundleUrl.href}?edge-smoke=${Date.now()}`)) as {
-      BlobServiceClient: typeof import("../src/blob").BlobServiceClient;
-    };
-    const { TableServiceClient } = (await import(`${tableBundleUrl.href}?edge-smoke=${Date.now()}`)) as {
-      TableServiceClient: typeof import("../src/table").TableServiceClient;
-    };
+    const rootModule = (await import(
+      `${rootBundleUrl.href}?edge-smoke=${Date.now()}`
+    )) as typeof import("../src/index");
+    const { AppConfigurationClient, BlobServiceClient, KeyVaultSecretClient, TableServiceClient } = rootModule;
 
     const tokenRequests: Array<{ url: string; headers: Headers }> = [];
     const sasRequests: Array<{ url: string; headers: Headers }> = [];
+    const appConfigurationRequests: Array<{ url: string; headers: Headers }> = [];
+
     const tokenFetch: typeof globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const requestHeaders = input instanceof Request ? input.headers : new Headers(init.headers);
       tokenRequests.push({
         url: typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url,
-        headers: new Headers(init.headers),
+        headers: new Headers(requestHeaders),
       });
+
+      if (tokenRequests.length === 3) {
+        return new Response(
+          JSON.stringify({
+            id: "https://example.vault.azure.net/secrets/edge-secret/version-1",
+            value: "edge-value",
+            attributes: {},
+          }),
+          {
+            status: 200,
+            statusText: "OK",
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
       return new Response("", { status: 201, statusText: "Created" });
     };
+
     const sasFetch: typeof globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const requestHeaders = input instanceof Request ? input.headers : new Headers(init.headers);
       sasRequests.push({
         url: typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url,
-        headers: new Headers(init.headers),
+        headers: new Headers(requestHeaders),
       });
       return new Response("", { status: 201, statusText: "Created" });
     };
+
+    const appConfigurationFetch: typeof globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const requestHeaders = input instanceof Request ? input.headers : new Headers(init.headers);
+      appConfigurationRequests.push({
+        url: typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url,
+        headers: new Headers(requestHeaders),
+      });
+
+      return new Response(JSON.stringify({ key: "edge-setting", value: "edge-value", etag: '"1"' }), {
+        status: 200,
+        statusText: "OK",
+        headers: { "content-type": "application/json" },
+      });
+    };
+
     const bearerCredential = {
       getAuthorizationHeader: async () => "Bearer edge-token",
     };
@@ -141,6 +117,28 @@ async function assertBlobAndTableBundlesSupportEdgeSafeAuthPaths(): Promise<void
     });
     await tokenTableService.createTableIfNotExists("edgetable");
 
+    const keyVaultClient = new KeyVaultSecretClient(
+      "https://example.vault.azure.net",
+      { getAuthorizationHeader: async () => "Bearer edge-token" },
+      { fetch: tokenFetch },
+    );
+    const secret = await keyVaultClient.getSecret("edge-secret");
+
+    if (secret.value !== "edge-value") {
+      throw new Error("Expected Key Vault secret value to round-trip in edge smoke test");
+    }
+
+    const appConfigurationClient = new AppConfigurationClient(
+      "https://example.azconfig.io",
+      { getAuthorizationHeader: async () => "Bearer edge-token" },
+      { fetch: appConfigurationFetch },
+    );
+    const setting = await appConfigurationClient.getConfigurationSetting("edge-setting");
+
+    if (setting.value !== "edge-value") {
+      throw new Error("Expected App Configuration setting value to round-trip in edge smoke test");
+    }
+
     const sasBlobService = BlobServiceClient.fromConnectionString(
       "BlobEndpoint=https://myaccount.blob.core.windows.net/;AccountName=myaccount;SharedAccessSignature=?sp=r&sv=2024-11-04&sig=testsig",
       { fetch: sasFetch },
@@ -153,14 +151,27 @@ async function assertBlobAndTableBundlesSupportEdgeSafeAuthPaths(): Promise<void
     );
     await sasTableService.createTableIfNotExists("edgetable");
 
-    if (tokenRequests.length !== 2) {
-      throw new Error(`Expected 2 token-auth requests, received ${tokenRequests.length}`);
+    if (tokenRequests.length !== 3) {
+      throw new Error(`Expected 3 token-auth requests, received ${tokenRequests.length}`);
     }
 
     for (const request of tokenRequests) {
       if (request.headers.get("Authorization") !== "Bearer edge-token") {
         throw new Error(`Expected bearer auth for ${request.url}`);
       }
+    }
+
+    if (appConfigurationRequests.length !== 1) {
+      throw new Error(`Expected 1 App Configuration request, received ${appConfigurationRequests.length}`);
+    }
+
+    const appConfigurationRequest = appConfigurationRequests[0]!;
+    if (appConfigurationRequest.url !== "https://example.azconfig.io/kv/edge-setting?api-version=2023-11-01") {
+      throw new Error(`Unexpected App Configuration request URL ${appConfigurationRequest.url}`);
+    }
+
+    if (appConfigurationRequest.headers.get("Authorization") !== "Bearer edge-token") {
+      throw new Error("Expected bearer auth header for App Configuration edge smoke request");
     }
 
     if (sasRequests.length !== 2) {
@@ -180,6 +191,16 @@ async function assertBlobAndTableBundlesSupportEdgeSafeAuthPaths(): Promise<void
   });
 }
 
+async function assertNodeBundleExportsNodeHelpers(): Promise<void> {
+  const nodeModule = (await import(`${nodeBundleUrl.href}?edge-smoke=${Date.now()}`)) as Record<string, unknown>;
+
+  for (const requiredExport of ["DefaultAzureCredential", "getDefaultAzureCredentialToken"]) {
+    if (!(requiredExport in nodeModule)) {
+      throw new Error(`Expected ${requiredExport} to remain available from the node bundle`);
+    }
+  }
+}
+
 async function withNodeGlobalsDisabled<T>(fn: () => Promise<T>): Promise<T> {
   const globalObject = globalThis as typeof globalThis & {
     process?: unknown;
@@ -188,8 +209,8 @@ async function withNodeGlobalsDisabled<T>(fn: () => Promise<T>): Promise<T> {
   const originalProcess = globalObject.process;
   const originalBuffer = globalObject.Buffer;
 
-  globalObject.process = undefined;
-  globalObject.Buffer = undefined;
+  (globalObject as { process?: unknown }).process = undefined;
+  (globalObject as { Buffer?: unknown }).Buffer = undefined;
 
   try {
     return await fn();

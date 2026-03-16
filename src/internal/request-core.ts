@@ -4,6 +4,7 @@ import type { AccessToken, TokenProvider } from "../types";
 
 export const storageOAuthScope = "https://storage.azure.com/.default";
 export const keyVaultOAuthScope = "https://vault.azure.net/.default";
+export const appConfigurationOAuthScope = "https://appconfig.azure.com/.default";
 
 interface HeaderCredential {
   getAuthorizationHeader(scope?: string | string[]): Promise<string>;
@@ -96,7 +97,7 @@ export async function resolveAuthorizationHeader(input: ResolveAuthorizationInpu
 function resolveAuthorizationScopeArgument(scope?: string | string[]): string | string[] {
   const values = resolveAuthorizationScopes(scope);
   if (values.length === 1) {
-    return values[0];
+    return values[0]!;
   }
 
   return values;
@@ -122,7 +123,7 @@ function getTokenProvider(input: TokenProviderInput): TokenProvider {
     cache: new Map<string, AccessToken | Promise<AccessToken>>(),
     loadToken: async () => {
       return loadDefaultToken({
-        scope: input.scopes.length === 1 ? input.scopes[0] : input.scopes,
+        scope: input.scopes.length === 1 ? input.scopes[0]! : input.scopes,
         fetch: input.fetch,
         authorityHost: input.authorityHost,
       });

@@ -18,58 +18,6 @@
     "./node": {
       "types": "./dist/node.d.mts",
       "import": "./dist/node.mjs"
-    },
-    "./blob": {
-      "types": "./dist/blob.d.mts",
-      "import": "./dist/blob.mjs"
-    },
-    "./table": {
-      "types": "./dist/table.d.mts",
-      "import": "./dist/table.mjs"
-    },
-    "./client": {
-      "types": "./dist/client.d.mts",
-      "import": "./dist/client.mjs"
-    },
-    "./convenience": {
-      "types": "./dist/convenience.d.mts",
-      "import": "./dist/convenience.mjs"
-    },
-    "./default-credential": {
-      "types": "./dist/default-credential.d.mts",
-      "import": "./dist/default-credential.mjs"
-    },
-    "./default-azure-credential": {
-      "types": "./dist/default-azure-credential.d.mts",
-      "import": "./dist/default-azure-credential.mjs"
-    },
-    "./errors": {
-      "types": "./dist/errors.d.mts",
-      "import": "./dist/errors.mjs"
-    },
-    "./keyvault-secrets": {
-      "types": "./dist/keyvault-secrets.d.mts",
-      "import": "./dist/keyvault-secrets.mjs"
-    },
-    "./managed-identity": {
-      "types": "./dist/managed-identity.d.mts",
-      "import": "./dist/managed-identity.mjs"
-    },
-    "./provider": {
-      "types": "./dist/provider.d.mts",
-      "import": "./dist/provider.mjs"
-    },
-    "./service-principal": {
-      "types": "./dist/service-principal.d.mts",
-      "import": "./dist/service-principal.mjs"
-    },
-    "./storage-shared-key-credential": {
-      "types": "./dist/storage-shared-key-credential.d.mts",
-      "import": "./dist/storage-shared-key-credential.mjs"
-    },
-    "./token": {
-      "types": "./dist/token.d.mts",
-      "import": "./dist/token.mjs"
     }
   },
   "scripts": {
@@ -83,6 +31,7 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "vitest run",
+    "test:app-configuration": "AZUREFETCH_RUN_APP_CONFIGURATION_TESTS=1 vitest run test/app-configuration.integration.test.ts",
     "test:edge-smoke": "bun run test/edge-runtime-smoke.ts",
     "test:keyvault": "AZUREFETCH_RUN_KEYVAULT_TESTS=1 vitest run test/keyvault.integration.test.ts",
     "test:storage": "AZUREFETCH_RUN_STORAGE_TESTS=1 vitest run test/storage.integration.test.ts",
