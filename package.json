@@ -1,6 +1,6 @@
 {
   "name": "azurefetch",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "Minimal dependency-free Azure fetch utilities",
   "license": "MIT",
@@ -39,6 +39,7 @@
     "bench:storage": "AZUREFETCH_RUN_STORAGE_BENCHMARK=1 bun run bench/storage.benchmark.ts",
     "bench:storage:azurite": "AZUREFETCH_RUN_STORAGE_BENCHMARK=1 AZUREFETCH_STORAGE_CONNECTION_STRING=UseDevelopmentStorage=true bun run bench/storage.benchmark.ts",
     "test:watch": "vitest",
+    "release": "bunx changelogen --release --push",
     "check": "oxfmt --check && oxlint . && oxlint . --type-aware && vitest run && obuild && bun run test:edge-smoke"
   },
   "devDependencies": {
