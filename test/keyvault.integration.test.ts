@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
-import { DefaultAzureCredential, KeyVaultRequestError, KeyVaultSecretClient } from "../src/node";
+import { DefaultAzureCredential, KeyVaultRequestError, KeyVaultSecretClient } from "../src/index";
 
 const runKeyVaultTests = process.env.AZUREFETCH_RUN_KEYVAULT_TESTS === "1";
 const keyVaultUrl = process.env.AZUREFETCH_KEYVAULT_URL;

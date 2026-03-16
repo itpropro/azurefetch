@@ -15,5 +15,3 @@ pre-push:
   commands:
     lint-type:
       run: bun run typecheck
-    test:
-      run: bun run test

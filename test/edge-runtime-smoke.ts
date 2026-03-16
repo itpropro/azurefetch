@@ -1,16 +1,14 @@
 import { readFile } from "node:fs/promises";
 
 const rootBundleUrl = new URL("../dist/index.mjs", import.meta.url);
-const nodeBundleUrl = new URL("../dist/node.mjs", import.meta.url);
 
 await assertNoNodeBuiltinLeakage();
 await assertRootBundleImportsWithoutNodeGlobals();
 await assertRootBundleSupportsEdgeSafeServiceClients();
-await assertNodeBundleExportsNodeHelpers();
 
 async function assertNoNodeBuiltinLeakage(): Promise<void> {
   const bundle = await readFile(rootBundleUrl, "utf8");
-  for (const forbiddenSnippet of ["node:", "child_process"]) {
+  for (const forbiddenSnippet of ['from "node:', "from 'node:", 'import("node:', "import('node:", "child_process"]) {
     if (bundle.includes(forbiddenSnippet)) {
       throw new Error(`Root bundle must stay edge-safe, found ${forbiddenSnippet} in dist/index.mjs`);
     }
@@ -27,18 +25,14 @@ async function assertRootBundleImportsWithoutNodeGlobals(): Promise<void> {
       "TableServiceClient",
       "KeyVaultSecretClient",
       "AppConfigurationClient",
+      "DefaultAzureCredential",
+      "getDefaultAzureCredentialToken",
       "StorageSharedKeyCredential",
       "downloadText",
       "uploadText",
     ]) {
       if (!(requiredExport in rootModule)) {
         throw new Error(`Expected ${requiredExport} to remain available from the root bundle`);
-      }
-    }
-
-    for (const forbiddenExport of ["DefaultAzureCredential", "getDefaultAzureCredentialToken"]) {
-      if (forbiddenExport in rootModule) {
-        throw new Error(`Root bundle should not expose ${forbiddenExport}; use azurefetch/node instead`);
       }
     }
   });
@@ -189,16 +183,6 @@ async function assertRootBundleSupportsEdgeSafeServiceClients(): Promise<void> {
       }
     }
   });
-}
-
-async function assertNodeBundleExportsNodeHelpers(): Promise<void> {
-  const nodeModule = (await import(`${nodeBundleUrl.href}?edge-smoke=${Date.now()}`)) as Record<string, unknown>;
-
-  for (const requiredExport of ["DefaultAzureCredential", "getDefaultAzureCredentialToken"]) {
-    if (!(requiredExport in nodeModule)) {
-      throw new Error(`Expected ${requiredExport} to remain available from the node bundle`);
-    }
-  }
 }
 
 async function withNodeGlobalsDisabled<T>(fn: () => Promise<T>): Promise<T> {

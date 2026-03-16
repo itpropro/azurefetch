@@ -115,11 +115,11 @@ for await (const page of listEntitiesPage(client, "https://myaccount.table.core.
 
 ### App Configuration
 
-Import `AppConfigurationClient` from the main package and use `azurefetch/node` only for the Node credential helper:
+Import `AppConfigurationClient` and `DefaultAzureCredential` from the main package:
 
 ```ts
 import { AppConfigurationClient } from "@itpropro/azurefetch";
-import { DefaultAzureCredential } from "@itpropro/azurefetch/node";
+import { DefaultAzureCredential } from "@itpropro/azurefetch";
 
 const client = new AppConfigurationClient("https://my-app-config.azconfig.io", new DefaultAzureCredential(), {
   prefix: "my-app",
@@ -146,11 +146,11 @@ Import service clients from the main package:
 ```ts
 import {
   BlobServiceClient,
+  DefaultAzureCredential,
   KeyVaultSecretClient,
   StorageSharedKeyCredential,
   TableServiceClient,
 } from "@itpropro/azurefetch";
-import { DefaultAzureCredential } from "@itpropro/azurefetch/node";
 
 const blobService = new BlobServiceClient("https://myaccount.blob.core.windows.net", new DefaultAzureCredential());
 
@@ -179,7 +179,7 @@ console.log(secret.value);
 - `getAuthorizationHeader(scope?)`
 - `getToken(scopes)`
 
-If no credential is provided, it falls back to the default token loader. In Node runtimes, import `@itpropro/azurefetch/node` to enable `getDefaultAzureCredentialToken()`.
+If no credential is provided, it falls back to the default token loader from the main package.
 
 ### Default credential chain
 
@@ -187,11 +187,11 @@ If no credential is provided, it falls back to the default token loader. In Node
 
 1. environment service principal (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`)
 2. managed identity (`/.default` scope)
-3. Azure CLI (`az account get-access-token`)
-4. Azure PowerShell (`Get-AzAccessToken` via `pwsh` or `powershell`)
+3. Azure CLI (`az account get-access-token`) when command execution is available
+4. Azure PowerShell (`Get-AzAccessToken` via `pwsh` or `powershell`) when command execution is available
 
 ```ts
-import { getDefaultAzureCredentialToken } from "@itpropro/azurefetch/node";
+import { getDefaultAzureCredentialToken } from "@itpropro/azurefetch";
 
 const token = await getDefaultAzureCredentialToken({
   scope: "https://management.azure.com/.default",
@@ -203,7 +203,7 @@ console.log(token.token);
 Provide an explicit `fetch` implementation if you are running outside globals:
 
 ```ts
-import { getDefaultAzureCredentialToken } from "@itpropro/azurefetch/node";
+import { getDefaultAzureCredentialToken } from "@itpropro/azurefetch";
 
 const token = await getDefaultAzureCredentialToken({
   scope: "https://graph.microsoft.com/.default",
@@ -212,14 +212,13 @@ const token = await getDefaultAzureCredentialToken({
 });
 ```
 
-`globalThis.fetch` is required for managed identity and service principal flows. CLI and PowerShell are only attempted when command execution is available.
+`globalThis.fetch` is required for managed identity and service principal flows. CLI and PowerShell are only attempted when command execution is available, including Node-compatible runtimes and Deno.
 
-## Public entrypoints
+## Public entrypoint
 
-| Entry point                 | Purpose                                                                                                                     |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `@itpropro/azurefetch`      | Main public API: fetch helpers, Blob, Table, Key Vault, App Configuration, shared credentials, and edge-safe auth utilities |
-| `@itpropro/azurefetch/node` | Node-only credential helpers such as `DefaultAzureCredential` and `getDefaultAzureCredentialToken`                          |
+| Entry point            | Purpose                                                                                                                             |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `@itpropro/azurefetch` | Main public API: fetch helpers, Blob, Table, Key Vault, App Configuration, shared credentials, and default Azure credential helpers |
 
 ## Manual App Configuration integration test
 

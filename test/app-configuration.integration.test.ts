@@ -1,7 +1,6 @@
 import { afterAll, describe, expect, test } from "vitest";
 
-import { AppConfigurationClient } from "../src/index";
-import { DefaultAzureCredential } from "../src/node";
+import { AppConfigurationClient, DefaultAzureCredential } from "../src/index";
 
 const runAppConfigurationTests = process.env.AZUREFETCH_RUN_APP_CONFIGURATION_TESTS === "1";
 const appConfigurationEndpoint =

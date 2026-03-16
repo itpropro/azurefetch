@@ -15,7 +15,7 @@ describe("AzureClient", () => {
   test("uses the default scope for token credential fallback", async () => {
     const getToken = vi.fn(async () => ({
       token: "token-value",
-      tokenType: "Bearer",
+      tokenType: "Bearer" as const,
       expiresOnTimestamp: Date.now() + 60_000,
     }));
 
@@ -29,7 +29,7 @@ describe("AzureClient", () => {
     const getAuthorizationHeader = vi.fn(async () => "Bearer header-token");
     const getToken = vi.fn(async () => ({
       token: "token-value",
-      tokenType: "Bearer",
+      tokenType: "Bearer" as const,
       expiresOnTimestamp: Date.now() + 60_000,
     }));
 
@@ -61,13 +61,13 @@ describe("AzureClient", () => {
   test("falls back to getDefaultAzureCredentialToken with per-request authority host", async () => {
     const providerSpy = vi.spyOn(defaultCredential, "getDefaultAzureCredentialToken").mockResolvedValue({
       token: "provider-token",
-      tokenType: "Bearer",
+      tokenType: "Bearer" as const,
       expiresOnTimestamp: Date.now() + 60_000,
     });
 
-    const { AzureClient: NodeAzureClient } = await import("../src/node");
+    const { AzureClient: RootAzureClient } = await import("../src/index");
 
-    const request = await new NodeAzureClient({
+    const request = await new RootAzureClient({
       scope: "https://storage.azure.com/.default",
       authorityHost: "https://login.default.test",
     }).sign("https://example.com", {
@@ -99,7 +99,7 @@ describe("AzureClient", () => {
     const requestCredential = {
       getToken: vi.fn(async () => ({
         token: "token-value",
-        tokenType: "Bearer",
+        tokenType: "Bearer" as const,
         expiresOnTimestamp: Date.now() + 60_000,
       })),
     };

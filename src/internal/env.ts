@@ -2,7 +2,7 @@ interface EnvironmentReader {
   get(name: string): string | undefined;
 }
 
-function createNodeEnvironmentReader(): EnvironmentReader | null {
+function createProcessEnvironmentReader(): EnvironmentReader | null {
   if (typeof process === "undefined") {
     return null;
   }
@@ -22,12 +22,32 @@ function createNodeEnvironmentReader(): EnvironmentReader | null {
   };
 }
 
+function createDenoEnvironmentReader(): EnvironmentReader | null {
+  const deno = globalThis as typeof globalThis & {
+    Deno?: {
+      env?: {
+        get(name: string): string | undefined;
+      };
+    };
+  };
+
+  if (typeof deno.Deno?.env?.get !== "function") {
+    return null;
+  }
+
+  return {
+    get(name: string) {
+      return deno.Deno?.env?.get(name);
+    },
+  };
+}
+
 export interface Environment {
   get: (name: string) => string | undefined;
 }
 
 export function getEnvironment(): Environment {
-  const reader = createNodeEnvironmentReader();
+  const reader = createProcessEnvironmentReader() ?? createDenoEnvironmentReader();
   if (reader == null) {
     return {
       get() {

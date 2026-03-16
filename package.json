@@ -1,7 +1,6 @@
 {
-  "name": "azurefetch",
+  "name": "@itpropro/azurefetch",
   "version": "0.0.2",
-  "private": true,
   "description": "Minimal dependency-free Azure fetch utilities",
   "license": "MIT",
   "files": [
@@ -14,14 +13,11 @@
     ".": {
       "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs"
-    },
-    "./node": {
-      "types": "./dist/node.d.mts",
-      "import": "./dist/node.mjs"
     }
   },
   "scripts": {
     "prepare": "if command -v git >/dev/null 2>&1; then lefthook install; fi",
+    "prepack": "bun run build",
     "build": "obuild",
     "dev": "vitest",
     "lint": "oxlint .",
@@ -40,6 +36,7 @@
     "bench:storage:azurite": "AZUREFETCH_RUN_STORAGE_BENCHMARK=1 AZUREFETCH_STORAGE_CONNECTION_STRING=UseDevelopmentStorage=true bun run bench/storage.benchmark.ts",
     "test:watch": "vitest",
     "release": "bunx changelogen --release --push",
+    "publish:npm": "npm publish --access public",
     "check": "oxfmt --check && oxlint . && oxlint . --type-aware && vitest run && obuild && bun run test:edge-smoke"
   },
   "devDependencies": {

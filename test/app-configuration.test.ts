@@ -384,13 +384,6 @@ describe("AppConfigurationClient", () => {
   });
 });
 
-describe("node export", () => {
-  test("re-exports AppConfigurationClient", async () => {
-    const nodeModule = await import("../src/node");
-    expect(nodeModule.AppConfigurationClient).toBe(AppConfigurationClient);
-  });
-});
-
 describe("root export", () => {
   test("exports AppConfigurationClient from the main entrypoint", async () => {
     const rootModule = await import("../src/index");

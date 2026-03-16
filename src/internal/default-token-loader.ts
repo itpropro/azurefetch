@@ -17,7 +17,7 @@ export function setDefaultTokenLoader(loader: DefaultTokenLoader | undefined): v
 export async function loadDefaultToken(input: DefaultTokenLoaderInput): Promise<AccessToken> {
   if (defaultTokenLoader == null) {
     throw new Error(
-      "No default Azure credential loader is configured. Import 'azurefetch/node' or provide a credential.",
+      "No default Azure credential loader is configured. Import the package root or provide a credential.",
     );
   }
 
