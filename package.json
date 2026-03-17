@@ -1,5 +1,5 @@
 {
-  "name": "@itpropro/azurefetch",
+  "name": "azurefetch",
   "version": "0.1.0",
   "description": "Minimal dependency-free Azure fetch utilities",
   "license": "MIT",

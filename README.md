@@ -1,7 +1,7 @@
 # azurefetch
 
-[![npm version](https://img.shields.io/npm/v/%40itpropro%2Fazurefetch?style=flat&colorA=18181B&colorB=F59E0B)](https://www.npmjs.com/package/@itpropro/azurefetch)
-[![bundle size](https://img.shields.io/bundlephobia/minzip/%40itpropro%2Fazurefetch?style=flat&colorA=18181B&colorB=F59E0B)](https://bundlephobia.com/package/@itpropro/azurefetch)
+[![npm version](https://img.shields.io/npm/v/%40itpropro%2Fazurefetch?style=flat&colorA=18181B&colorB=F59E0B)](https://www.npmjs.com/package/azurefetch)
+[![bundle size](https://img.shields.io/bundlephobia/minzip/%40itpropro%2Fazurefetch?style=flat&colorA=18181B&colorB=F59E0B)](https://bundlephobia.com/package/azurefetch)
 
 Fetch-first Azure utilities for modern runtimes.
 
@@ -20,13 +20,13 @@ Fetch-first Azure utilities for modern runtimes.
 
 ```bash
 # bun
-bun add @itpropro/azurefetch
+bun add azurefetch
 
 # npm
-npm install @itpropro/azurefetch
+npm install azurefetch
 
 # pnpm
-pnpm add @itpropro/azurefetch
+pnpm add azurefetch
 ```
 
 ## Usage
@@ -44,13 +44,13 @@ import {
   listEntitiesPage,
   uploadText,
   upsertEntity,
-} from "@itpropro/azurefetch";
+} from "azurefetch";
 ```
 
 `AzureClient` is the main entrypoint for standard request flows. It resolves Azure auth headers and delegates the actual request to `fetch`.
 
 ```ts
-import { AzureClient } from "@itpropro/azurefetch";
+import { AzureClient } from "azurefetch";
 
 const client = new AzureClient({
   scope: "https://storage.azure.com/.default",
@@ -80,7 +80,7 @@ import {
   listEntitiesPage,
   upsertEntity,
   uploadText,
-} from "@itpropro/azurefetch";
+} from "azurefetch";
 
 const client = new AzureClient({
   scope: "https://storage.azure.com/.default",
@@ -118,8 +118,8 @@ for await (const page of listEntitiesPage(client, "https://myaccount.table.core.
 Import `AppConfigurationClient` and `DefaultAzureCredential` from the main package:
 
 ```ts
-import { AppConfigurationClient } from "@itpropro/azurefetch";
-import { DefaultAzureCredential } from "@itpropro/azurefetch";
+import { AppConfigurationClient } from "azurefetch";
+import { DefaultAzureCredential } from "azurefetch";
 
 const client = new AppConfigurationClient("https://my-app-config.azconfig.io", new DefaultAzureCredential(), {
   prefix: "my-app",
@@ -150,7 +150,7 @@ import {
   KeyVaultSecretClient,
   StorageSharedKeyCredential,
   TableServiceClient,
-} from "@itpropro/azurefetch";
+} from "azurefetch";
 
 const blobService = new BlobServiceClient("https://myaccount.blob.core.windows.net", new DefaultAzureCredential());
 
@@ -191,7 +191,7 @@ If no credential is provided, it falls back to the default token loader from the
 4. Azure PowerShell (`Get-AzAccessToken` via `pwsh` or `powershell`) when command execution is available
 
 ```ts
-import { getDefaultAzureCredentialToken } from "@itpropro/azurefetch";
+import { getDefaultAzureCredentialToken } from "azurefetch";
 
 const token = await getDefaultAzureCredentialToken({
   scope: "https://management.azure.com/.default",
@@ -203,7 +203,7 @@ console.log(token.token);
 Provide an explicit `fetch` implementation if you are running outside globals:
 
 ```ts
-import { getDefaultAzureCredentialToken } from "@itpropro/azurefetch";
+import { getDefaultAzureCredentialToken } from "azurefetch";
 
 const token = await getDefaultAzureCredentialToken({
   scope: "https://graph.microsoft.com/.default",
@@ -216,9 +216,9 @@ const token = await getDefaultAzureCredentialToken({
 
 ## Public entrypoint
 
-| Entry point            | Purpose                                                                                                                             |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `@itpropro/azurefetch` | Main public API: fetch helpers, Blob, Table, Key Vault, App Configuration, shared credentials, and default Azure credential helpers |
+| Entry point  | Purpose                                                                                                                             |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `azurefetch` | Main public API: fetch helpers, Blob, Table, Key Vault, App Configuration, shared credentials, and default Azure credential helpers |
 
 ## License
 
