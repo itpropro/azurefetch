@@ -335,8 +335,11 @@ function buildRecoverDeletedSecretPath(vaultUrl: string, name: string): string {
 }
 
 function buildPageUrl(vaultUrl: string, path: string, settings: KeyVaultPageSettings | undefined): string {
+  const vault = new URL(`${vaultUrl}/`);
   const requestUrl =
-    settings?.continuationToken == null ? new URL(path, `${vaultUrl}/`) : new URL(settings.continuationToken);
+    settings?.continuationToken == null
+      ? new URL(path, vault)
+      : resolveContinuationUrl(settings.continuationToken, vault);
   const normalizedPageSize = normalizeMaxPageSize(settings?.maxPageSize);
 
   if (normalizedPageSize != null) {
@@ -344,6 +347,25 @@ function buildPageUrl(vaultUrl: string, path: string, settings: KeyVaultPageSett
   }
 
   return requestUrl.toString();
+}
+
+function resolveContinuationUrl(continuationToken: string, vault: URL): URL {
+  let url: URL;
+  try {
+    url = new URL(continuationToken, vault);
+  } catch {
+    throw new TypeError("Invalid Key Vault continuation URL");
+  }
+
+  if (url.protocol !== "https:") {
+    throw new TypeError("Key Vault continuation URL must use HTTPS");
+  }
+
+  if (url.origin !== vault.origin) {
+    throw new TypeError("Key Vault continuation URL must match the configured vault origin");
+  }
+
+  return url;
 }
 
 function normalizeVaultUrl(vaultUrl: string): string {
