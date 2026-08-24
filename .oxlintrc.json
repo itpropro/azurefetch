@@ -13,8 +13,6 @@
     "bench/**"
   ],
   "rules": {
-    "typescript/naming-convention": "error",
-    "typescript/prefer-destructuring": "error",
     "typescript/await-thenable": "error",
     "typescript/consistent-return": "error",
     "typescript/consistent-type-exports": "error",
