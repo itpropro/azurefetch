@@ -108,6 +108,52 @@ describe("BlobServiceClient.fromConnectionString", () => {
   });
 });
 
+describe("BlobServiceClient.generateAccountSasUrl", () => {
+  test("signs a deterministic Account SAS with canonical fields", async () => {
+    const credential = new StorageSharedKeyCredential("myaccount", "AQID");
+    const computeHMACSHA256 = vi.spyOn(credential, "computeHMACSHA256").mockResolvedValue("+/==");
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", credential);
+
+    const sasUrl = await client.generateAccountSasUrl(new Date("2030-01-01T00:00:00.000Z"), {
+      permissions: "lwr",
+      services: "fb",
+      resourceTypes: "ocs",
+      protocol: "https,http",
+    });
+
+    expect(computeHMACSHA256).toHaveBeenCalledWith(
+      "myaccount\nrwl\nbf\nsco\n\n2030-01-01T00:00:00Z\n\nhttps,http\n2024-11-04\n\n",
+    );
+    expect(new URL(sasUrl).search).toBe(
+      "?sp=rwl&ss=bf&srt=sco&sv=2024-11-04&se=2030-01-01T00%3A00%3A00Z&spr=https%2Chttp&sig=%2B%2F%3D%3D",
+    );
+  });
+
+  test("rejects credentials that cannot sign Account SAS tokens", async () => {
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net");
+
+    await expect(client.generateAccountSasUrl(new Date("2030-01-01T00:00:00Z"), { permissions: "r" })).rejects.toThrow(
+      "requires a StorageSharedKeyCredential",
+    );
+  });
+
+  test.each([
+    ["invalid expiry", new Date(Number.NaN), { permissions: "r" }],
+    ["empty permissions", new Date("2030-01-01T00:00:00Z"), { permissions: "" }],
+    ["invalid permissions", new Date("2030-01-01T00:00:00Z"), { permissions: "q" }],
+    ["invalid services", new Date("2030-01-01T00:00:00Z"), { permissions: "r", services: "z" }],
+    ["empty services", new Date("2030-01-01T00:00:00Z"), { permissions: "r", services: "" }],
+    ["invalid resource types", new Date("2030-01-01T00:00:00Z"), { permissions: "r", resourceTypes: "z" }],
+    ["empty resource types", new Date("2030-01-01T00:00:00Z"), { permissions: "r", resourceTypes: "" }],
+    ["unsupported protocol", new Date("2030-01-01T00:00:00Z"), { permissions: "r", protocol: "http" }],
+  ])("rejects %s", async (_name, expiry, options) => {
+    const credential = new StorageSharedKeyCredential("myaccount", "AQID");
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", credential);
+
+    await expect(client.generateAccountSasUrl(expiry, options)).rejects.toThrow();
+  });
+});
+
 describe("BlockBlobClient", () => {
   test("uploads content and sets shared-key auth header", async () => {
     const headers: HeadersInit[] = [];

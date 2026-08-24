@@ -232,22 +232,24 @@ if (shouldRunIntegration) {
         });
       });
 
-      test("generateAccountSasUrl includes the requested permissions and services", () => {
-        const sasUrl = blobService.generateAccountSasUrl(new Date("2026-01-01T00:00:00.000Z"), {
-          permissions: "rwl",
-          services: "bf",
-          resourceTypes: "sco",
-          protocol: "http",
-        });
-        const parsed = new URL(sasUrl);
+      if (testConfig.kind === "connection-string") {
+        test("generateAccountSasUrl creates a usable signed URL", async () => {
+          const sasUrl = await blobService.generateAccountSasUrl(new Date(Date.now() + 60 * 60 * 1000), {
+            permissions: "l",
+            services: "b",
+            resourceTypes: "s",
+            protocol: "https,http",
+          });
+          const parsed = new URL(sasUrl);
 
-        expect(parsed.searchParams.get("sp")).toBe("rwl");
-        expect(parsed.searchParams.get("ss")).toBe("bf");
-        expect(parsed.searchParams.get("srt")).toBe("sco");
-        expect(parsed.searchParams.get("spr")).toBe("http");
-        expect(parsed.searchParams.get("se")).toBe("2026-01-01T00:00:00.000Z");
-        expect(parsed.searchParams.get("sv")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      });
+          expect(parsed.searchParams.get("sig")).toBeTruthy();
+
+          const sasClient = new BlobServiceClient(sasUrl);
+          const pages = sasClient.listContainers().byPage({ maxPageSize: 1 });
+          const firstPage = await pages[Symbol.asyncIterator]().next();
+          expect(firstPage.done).toBe(false);
+        });
+      }
 
       describe.sequential("blob batch", () => {
         const batchContainer = blobService.getContainerClient(`azfetch-blob-${randomToken()}-batch`);
