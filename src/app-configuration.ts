@@ -340,7 +340,6 @@ export class AppConfigurationClient {
 
   private addSyncTokenHeaderValue(value: string | undefined): void {
     if (value == null || value.length === 0) {
-      this.syncTokens.clear();
       return;
     }
 

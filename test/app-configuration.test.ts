@@ -245,6 +245,48 @@ describe("AppConfigurationClient", () => {
     ]);
   });
 
+  test("retains and merges the highest sync token sequence for each ID", async () => {
+    const response = (syncToken?: string) =>
+      new Response(JSON.stringify({ key: "plain", value: "value", etag: '"1"' }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          ...(syncToken !== undefined ? { "sync-token": syncToken } : {}),
+        },
+      });
+    const expectedRequestTokens = [
+      null,
+      "a=MQ==,b=Mg==",
+      "a=MQ==,b=Mg==",
+      "a=aGlnaA==,b=Mg==,c=Mw==",
+      "a=aGlnaA==,b=Mg==,c=Mw==",
+      "a=aGlnaA==,b=Mg==,c=Mw==",
+    ];
+    const responseTokens = [
+      "a=MQ==;sn=5,b=Mg==;sn=2",
+      "a=bG93;sn=4,b=ZXF1YWw=;sn=2",
+      "a=aGlnaA==;sn=6,c=Mw==;sn=1",
+      "",
+      undefined,
+      undefined,
+    ];
+    const fetcher = createFetchMock(
+      responseTokens.map((syncToken, index) => (_url, init) => {
+        expect(new Headers(init.headers).get("Sync-Token")).toBe(expectedRequestTokens[index]);
+        return response(syncToken);
+      }),
+    );
+    const client = new AppConfigurationClient(
+      "https://example.azconfig.io",
+      { getAuthorizationHeader: async () => "Bearer token" },
+      { fetch: fetcher },
+    );
+
+    for (const _ of responseTokens) {
+      await client.getConfigurationSetting("plain");
+    }
+  });
+
   test("listConfigurationSettings escapes reserved characters in generated prefix and label filters", async () => {
     const fetcher = createFetchMock([
       (url) => {
