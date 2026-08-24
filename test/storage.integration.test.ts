@@ -504,6 +504,28 @@ if (shouldRunIntegration) {
           expect(secondRow).toMatchObject(batchedRows[1]);
         });
 
+        test("submitTransaction rolls back every action when one create conflicts", async () => {
+          const rolledBackRow = {
+            partitionKey: batchedRows[0].partitionKey,
+            rowKey: "row-rolled-back",
+            value: "must-not-commit",
+          };
+
+          await expect(
+            tableClient.submitTransaction([
+              { action: "create", entity: rolledBackRow },
+              { action: "create", entity: batchedRows[0] },
+            ]),
+          ).rejects.toThrow();
+
+          await expect(
+            tableClient.getEntity(rolledBackRow.partitionKey, rolledBackRow.rowKey),
+          ).resolves.toBeUndefined();
+          await expect(
+            tableClient.getEntity(batchedRows[0].partitionKey, batchedRows[0].rowKey),
+          ).resolves.toMatchObject(batchedRows[0]);
+        });
+
         test("submitTransaction deletes multiple rows", async () => {
           const response = await tableClient.submitTransaction(
             batchedRows.map((row) => ({

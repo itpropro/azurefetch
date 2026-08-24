@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { TableClient, TableServiceClient } from "../src/table";
 import { StorageSharedKeyCredential } from "../src/blob";
@@ -293,28 +293,14 @@ describe("TableClient", () => {
     expect(response).toEqual({ succeeded: true });
   });
 
-  test("submits a transaction for create/update/upsert/delete operations", async () => {
-    const captured: Array<{ url: string; method?: string; body?: string; headers?: HeadersInit }> = [];
+  test("submits one atomic changeset and parses ordered subresponses", async () => {
+    let capturedUrl = "";
+    let capturedInit: RequestInit = {};
     const fetcher = createFetchMock([
       (url, init) => {
-        captured.push({ url, method: init.method, body: init.body as string | undefined, headers: init.headers });
-        return textResponse("", 201);
-      },
-      (url, init) => {
-        captured.push({ url, method: init.method, body: init.body as string | undefined, headers: init.headers });
-        return textResponse("", 204);
-      },
-      (url, init) => {
-        captured.push({ url, method: init.method, body: init.body as string | undefined, headers: init.headers });
-        return textResponse("", 404);
-      },
-      (url, init) => {
-        captured.push({ url, method: init.method, body: init.body as string | undefined, headers: init.headers });
-        return textResponse("", 204);
-      },
-      (url, init) => {
-        captured.push({ url, method: init.method, body: init.body as string | undefined, headers: init.headers });
-        return textResponse("", 202);
+        capturedUrl = url;
+        capturedInit = init;
+        return textResponse(transactionResponseBody([201, 204, 204, 204]), 202);
       },
     ]);
 
@@ -330,7 +316,7 @@ describe("TableClient", () => {
       { action: "create", entity: { partitionKey: "partition-a", rowKey: "row-1", value: "created" } },
       {
         action: "update",
-        entity: { partitionKey: "partition-a", rowKey: "row-1", value: "updated" },
+        entity: { partitionKey: "partition-a", rowKey: "row-4", value: "updated" },
       },
       {
         action: "upsert",
@@ -340,39 +326,102 @@ describe("TableClient", () => {
     ]);
 
     expect(response.status).toBe(202);
-    expect(response.subResponses).toEqual([{ status: 201 }, { status: 204 }, { status: 204 }, { status: 202 }]);
+    expect(response.subResponses).toEqual([{ status: 201 }, { status: 204 }, { status: 204 }, { status: 204 }]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(capturedUrl).toBe("https://myaccount.table.core.windows.net/$batch");
+    expect(capturedInit.method).toBe("POST");
 
-    expect(captured).toHaveLength(5);
-    expect(captured[0]).toMatchObject({
-      method: "POST",
-      url: "https://myaccount.table.core.windows.net/my-table",
-    });
-    expect(JSON.parse(captured[0].body || "{}")).toEqual({
-      PartitionKey: "partition-a",
-      RowKey: "row-1",
-      value: "created",
-    });
+    const headers = new Headers(capturedInit.headers);
+    expect(headers.get("Content-Type")).toMatch(/^multipart\/mixed; boundary=batch_/);
+    const body = String(capturedInit.body);
+    expect(body).toMatch(/\r\n/);
+    expect(body.match(/Content-Type: application\/http/g)).toHaveLength(4);
+    expect(body).toContain("Content-ID: 1");
+    const operations = body.split("Content-Type: application/http").slice(1);
+    expect(operations[0]).toContain("POST https://myaccount.table.core.windows.net/my-table HTTP/1.1");
+    expect(operations[0]).toContain('{"value":"created","PartitionKey":"partition-a","RowKey":"row-1"}');
+    expect(operations[1]).toMatch(
+      /PUT https:\/\/myaccount\.table\.core\.windows\.net\/my-table\(PartitionKey='partition-a',RowKey='row-4'\) HTTP\/1\.1[\s\S]*?If-Match: \*/,
+    );
+    expect(operations[2]).toContain(
+      "PUT https://myaccount.table.core.windows.net/my-table(PartitionKey='partition-a',RowKey='row-2') HTTP/1.1",
+    );
+    expect(operations[2]).not.toContain("If-Match");
+    expect(operations[3]).toMatch(
+      /DELETE https:\/\/myaccount\.table\.core\.windows\.net\/my-table\(PartitionKey='partition-a',RowKey='row-3'\) HTTP\/1\.1[\s\S]*?If-Match: \*/,
+    );
+    expect(body).toMatch(/--changeset_[^\r\n]+--\r\n--batch_[^\r\n]+--\r\n$/);
+  });
 
-    expect(captured[1]).toMatchObject({
-      method: "PUT",
-      url: "https://myaccount.table.core.windows.net/my-table(PartitionKey='partition-a',RowKey='row-1')",
-    });
-    expect(new Headers(captured[1].headers || {}).get("If-Match")).toBe("*");
+  test.each([
+    ["empty batches", [], "at least one action"],
+    [
+      "more than 100 actions",
+      Array.from({ length: 101 }, (_, index) => ({
+        action: "create" as const,
+        entity: { partitionKey: "partition", rowKey: `row-${index}` },
+      })),
+      "more than 100 actions",
+    ],
+    [
+      "mixed partition keys",
+      [
+        { action: "create" as const, entity: { partitionKey: "one", rowKey: "row-1" } },
+        { action: "delete" as const, partitionKey: "two", rowKey: "row-2" },
+      ],
+      "same partition key",
+    ],
+    [
+      "duplicate entity targets",
+      [
+        { action: "create" as const, entity: { partitionKey: "one", rowKey: "row-1" } },
+        { action: "delete" as const, partitionKey: "one", rowKey: "row-1" },
+      ],
+      "duplicate entity targets",
+    ],
+  ] as const)("rejects %s before dispatch", async (_case, actions, message) => {
+    const fetcher = vi.fn<typeof fetch>();
+    const client = createTableClient(fetcher);
 
-    expect(captured[2]).toMatchObject({
-      method: "PUT",
-      url: "https://myaccount.table.core.windows.net/my-table(PartitionKey='partition-a',RowKey='row-2')",
-    });
+    await expect(client.submitTransaction([...actions])).rejects.toThrow(message);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
 
-    expect(captured[3]).toMatchObject({
-      method: "POST",
-      url: "https://myaccount.table.core.windows.net/my-table",
-    });
+  test("rejects a transaction payload over 4 MiB before dispatch", async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    const client = createTableClient(fetcher);
 
-    expect(captured[4]).toMatchObject({
-      method: "DELETE",
-      url: "https://myaccount.table.core.windows.net/my-table(PartitionKey='partition-a',RowKey='row-3')",
-    });
+    await expect(
+      client.submitTransaction([
+        {
+          action: "create",
+          entity: { partitionKey: "partition", rowKey: "row", value: "x".repeat(4 * 1024 * 1024) },
+        },
+      ]),
+    ).rejects.toThrow("must not exceed 4 MiB");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  test("surfaces a failed transaction subresponse", async () => {
+    const fetcher = createFetchMock([() => textResponse(transactionResponseBody([201, 409]), 202)]);
+    const client = createTableClient(fetcher);
+
+    await expect(
+      client.submitTransaction([
+        { action: "create", entity: { partitionKey: "partition", rowKey: "row-1" } },
+        { action: "create", entity: { partitionKey: "partition", rowKey: "row-2" } },
+      ]),
+    ).rejects.toThrow("subresponse returned 409");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  test("rejects malformed transaction responses instead of synthesizing success", async () => {
+    const fetcher = createFetchMock([() => textResponse("", 202)]);
+    const client = createTableClient(fetcher);
+
+    await expect(
+      client.submitTransaction([{ action: "delete", partitionKey: "partition", rowKey: "row" }]),
+    ).rejects.toThrow("contained 0 subresponses; expected 1");
   });
 
   test("maps table delete if-not-exists response", async () => {
@@ -477,3 +526,31 @@ describe("TableClient.listEntities", () => {
     expect(request.searchParams.get("$top")).toBe("1");
   });
 });
+
+function createTableClient(fetcher: typeof fetch): TableClient {
+  return new TableClient(
+    "https://myaccount.table.core.windows.net/my-table",
+    "my-table",
+    undefined,
+    fetcher,
+    "https://myaccount.table.core.windows.net",
+  );
+}
+
+function transactionResponseBody(statuses: number[]): string {
+  const lines = ["--batchresponse_test", "Content-Type: multipart/mixed; boundary=changesetresponse_test", ""];
+  for (const status of statuses) {
+    lines.push(
+      "--changesetresponse_test",
+      "Content-Type: application/http",
+      "Content-Transfer-Encoding: binary",
+      "",
+      `HTTP/1.1 ${status} ${status >= 200 && status < 300 ? "Success" : "Failure"}`,
+      "Content-Length: 0",
+      "",
+      "",
+    );
+  }
+  lines.push("--changesetresponse_test--", "--batchresponse_test--", "");
+  return lines.join("\r\n");
+}
