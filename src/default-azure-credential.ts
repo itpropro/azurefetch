@@ -2,6 +2,7 @@ import { createTokenProvider } from "./provider";
 import { getDefaultAzureCredentialToken } from "./default-credential";
 import type { AccessToken, TokenProvider } from "./types";
 import { resolveRequiredScopes, storageOAuthScope } from "./internal/request-core";
+import { sanitizeAuthorityHost } from "./internal/url";
 
 export interface DefaultAzureCredentialOptions {
   authorityHost?: string;
@@ -12,7 +13,14 @@ export interface DefaultAzureCredentialOptions {
 export class DefaultAzureCredential {
   private readonly providers = new Map<string, TokenProvider>();
 
-  constructor(private readonly options: DefaultAzureCredentialOptions = {}) {}
+  private readonly options: DefaultAzureCredentialOptions;
+
+  constructor(options: DefaultAzureCredentialOptions = {}) {
+    this.options = {
+      ...options,
+      authorityHost: options.authorityHost == null ? undefined : sanitizeAuthorityHost(options.authorityHost),
+    };
+  }
 
   private getTokenProvider(scopes: string[]): TokenProvider {
     const cacheKey = JSON.stringify(scopes);

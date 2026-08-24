@@ -7,6 +7,7 @@ import {
   parseSecretProperties,
 } from "./internal/keyvault-secret";
 import { AzureClient, type AzureRequestInit, type AzureRequestOverrides } from "./client";
+import { requireHttpsUrl } from "./internal/url";
 
 const keyVaultApiVersion = "7.6";
 
@@ -346,7 +347,7 @@ function buildPageUrl(vaultUrl: string, path: string, settings: KeyVaultPageSett
 }
 
 function normalizeVaultUrl(vaultUrl: string): string {
-  const url = new URL(vaultUrl);
+  const url = requireHttpsUrl(vaultUrl, "vaultUrl");
   url.pathname = url.pathname.replace(/\/+$/, "");
   url.search = "";
   url.hash = "";

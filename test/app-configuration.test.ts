@@ -15,6 +15,37 @@ describe("AppConfigurationClient", () => {
     vi.unstubAllGlobals();
   });
 
+  test("rejects HTTP endpoints and authority hosts during construction", () => {
+    const credential = { getAuthorizationHeader: vi.fn(async () => "Bearer token") };
+    const fetcher = vi.fn<typeof fetch>();
+
+    expect(() => new AppConfigurationClient("http://example.azconfig.io", credential, { fetch: fetcher })).toThrow(
+      "endpoint must use HTTPS",
+    );
+    expect(
+      () =>
+        new AppConfigurationClient("https://private.azconfig.local", credential, {
+          authorityHost: "http://identity.test",
+          fetch: fetcher,
+        }),
+    ).toThrow("authorityHost must use HTTPS");
+    expect(() =>
+      AppConfigurationClient.fromConnectionString("Endpoint=http://example.azconfig.io;Id=test;Secret=AQID"),
+    ).toThrow("endpoint must use HTTPS");
+    expect(credential.getAuthorizationHeader).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  test("supports HTTPS private-link endpoints with sovereign authority hosts", () => {
+    const client = new AppConfigurationClient(
+      "https://config.private-link.internal",
+      { getAuthorizationHeader: async () => "Bearer token" },
+      { authorityHost: "https://login.microsoftonline.us" },
+    );
+
+    expect(client.url).toBe("https://config.private-link.internal");
+  });
+
   test("uses the public cloud App Configuration scope for AAD requests", async () => {
     const getAuthorizationHeader = vi.fn(async (scope?: string | string[]) => `Bearer ${scope}`);
     const fetcher = createFetchMock([

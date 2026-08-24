@@ -31,6 +31,21 @@ describe("getDefaultAzureCredentialToken", () => {
     restoreEnv(originalEnv);
   });
 
+  test("rejects an HTTP authority before trying the credential chain", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+
+    await expect(
+      getDefaultAzureCredentialToken({
+        scope: "scope/.default",
+        authorityHost: "http://identity.test",
+        fetch: fetchMock,
+      }),
+    ).rejects.toThrow("authorityHost must use HTTPS");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockExecuteCommand).not.toHaveBeenCalled();
+  });
+
   test("uses service principal first", async () => {
     process.env.AZURE_TENANT_ID = "tenant";
     process.env.AZURE_CLIENT_ID = "client";

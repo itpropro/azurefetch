@@ -12,6 +12,29 @@ describe("AzureClient", () => {
     vi.restoreAllMocks();
   });
 
+  test("rejects an HTTP default authority during construction", () => {
+    expect(() => new AzureClient({ authorityHost: "http://identity.test" })).toThrow("authorityHost must use HTTPS");
+  });
+
+  test("rejects an HTTP request authority before credential acquisition", async () => {
+    const getAuthorizationHeader = vi.fn(async () => "Bearer token");
+    const client = new AzureClient({ credential: { getAuthorizationHeader } });
+
+    await expect(
+      client.sign("https://example.com", {
+        azure: { authorityHost: "http://identity.test" },
+      }),
+    ).rejects.toThrow("authorityHost must use HTTPS");
+
+    expect(getAuthorizationHeader).not.toHaveBeenCalled();
+  });
+
+  test("rejects an HTTP DefaultAzureCredential authority during construction", () => {
+    expect(() => new DefaultAzureCredential({ authorityHost: "http://identity.test" })).toThrow(
+      "authorityHost must use HTTPS",
+    );
+  });
+
   test.each([
     { tokenType: undefined, expectedScheme: "Bearer" },
     { tokenType: "Bearer" as const, expectedScheme: "Bearer" },

@@ -10,6 +10,33 @@ import {
 import { createFetchMock, getBodyString, jsonResponse, textResponse } from "./helpers";
 
 describe("KeyVaultSecretClient", () => {
+  test("rejects HTTP vault and authority URLs during construction", () => {
+    const credential = { getAuthorizationHeader: vi.fn(async () => "Bearer token") };
+    const fetcher = vi.fn<typeof fetch>();
+
+    expect(() => new KeyVaultSecretClient("http://example.vault.azure.net", credential, { fetch: fetcher })).toThrow(
+      "vaultUrl must use HTTPS",
+    );
+    expect(
+      () =>
+        new KeyVaultSecretClient("https://private.vault.local", credential, {
+          authorityHost: "http://identity.test",
+          fetch: fetcher,
+        }),
+    ).toThrow("authorityHost must use HTTPS");
+    expect(credential.getAuthorizationHeader).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  test("supports HTTPS sovereign and private-link vault hosts", () => {
+    expect(createClient(vi.fn<typeof fetch>()).url).toBe("https://example.vault.azure.net");
+    expect(
+      new KeyVaultSecretClient("https://vault.private-link.internal", undefined, {
+        authorityHost: "https://login.microsoftonline.us",
+      }).url,
+    ).toBe("https://vault.private-link.internal");
+  });
+
   describe("setSecret", () => {
     test("sends the default Key Vault scope and serializes secret attributes", async () => {
       const expiresOn = new Date("2027-01-01T00:00:00.000Z");
