@@ -289,7 +289,7 @@ export class BlobServiceClient {
     };
   }
 
-  public generateAccountSasUrl(
+  public async generateAccountSasUrl(
     expiresOn = new Date(Date.now() + 60 * 60 * 1000),
     options?: {
       permissions?: string;
@@ -297,12 +297,38 @@ export class BlobServiceClient {
       resourceTypes?: string;
       protocol?: string;
     },
-  ): string {
-    const permissions = options?.permissions ?? "";
-    const services = options?.services ?? "b";
-    const resourceTypes = options?.resourceTypes ?? "sco";
+  ): Promise<string> {
+    if (!(this.credential instanceof StorageSharedKeyCredential)) {
+      throw new TypeError("Account SAS generation requires a StorageSharedKeyCredential");
+    }
+
+    const permissions = AccountSASPermissions.parse(options?.permissions ?? "").toString();
+    if (permissions.length === 0) {
+      throw new RangeError("Account SAS permissions cannot be empty");
+    }
+
+    const services = normalizeAccountSasCharacters(options?.services ?? "b", "btqf", "services");
+    const resourceTypes = normalizeAccountSasCharacters(options?.resourceTypes ?? "sco", "sco", "resource types");
     const protocol = options?.protocol ?? "https";
-    const expiry = expiresOn.toISOString();
+    if (protocol !== "https" && protocol !== "https,http") {
+      throw new RangeError(`Unsupported Account SAS protocol: ${protocol}`);
+    }
+
+    const expiry = formatAccountSasDate(expiresOn);
+    const stringToSign = [
+      this.credential.accountName,
+      permissions,
+      services,
+      resourceTypes,
+      "",
+      expiry,
+      "",
+      protocol,
+      xmsServiceVersion,
+      "",
+      "",
+    ].join("\n");
+    const signature = await this.credential.computeHMACSHA256(stringToSign);
 
     const signedUrl = new URL(this.url);
     signedUrl.searchParams.set("sp", permissions);
@@ -311,6 +337,7 @@ export class BlobServiceClient {
     signedUrl.searchParams.set("sv", xmsServiceVersion);
     signedUrl.searchParams.set("se", expiry);
     signedUrl.searchParams.set("spr", protocol);
+    signedUrl.searchParams.set("sig", signature);
 
     return signedUrl.toString();
   }
@@ -907,6 +934,33 @@ function validateUrl(rawUrl: string): string {
   }
 
   return parsed.toString();
+}
+
+function normalizeAccountSasCharacters(value: string, canonicalOrder: string, fieldName: string): string {
+  const selected = new Set(value);
+  for (const character of selected) {
+    if (!canonicalOrder.includes(character)) {
+      throw new RangeError(`Invalid Account SAS ${fieldName} character: ${character}`);
+    }
+  }
+
+  const normalized = canonicalOrder
+    .split("")
+    .filter((character) => selected.has(character))
+    .join("");
+  if (normalized.length === 0) {
+    throw new RangeError(`Account SAS ${fieldName} cannot be empty`);
+  }
+
+  return normalized;
+}
+
+function formatAccountSasDate(value: Date): string {
+  if (Number.isNaN(value.getTime())) {
+    throw new RangeError("Account SAS expiry must be a valid date");
+  }
+
+  return value.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 function encodeBlobName(name: string): string {

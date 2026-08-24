@@ -108,6 +108,96 @@ describe("BlobServiceClient.fromConnectionString", () => {
   });
 });
 
+describe("BlobServiceClient.generateAccountSasUrl", () => {
+  test("signs a deterministic Account SAS with canonical fields", async () => {
+    const credential = new StorageSharedKeyCredential("myaccount", "AQID");
+    const computeHMACSHA256 = vi.spyOn(credential, "computeHMACSHA256").mockResolvedValue("+/==");
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", credential);
+
+    const sasUrl = await client.generateAccountSasUrl(new Date("2030-01-01T00:00:00.000Z"), {
+      permissions: "lwr",
+      services: "fb",
+      resourceTypes: "ocs",
+      protocol: "https,http",
+    });
+
+    expect(computeHMACSHA256).toHaveBeenCalledWith(
+      "myaccount\nrwl\nbf\nsco\n\n2030-01-01T00:00:00Z\n\nhttps,http\n2024-11-04\n\n",
+    );
+    expect(new URL(sasUrl).search).toBe(
+      "?sp=rwl&ss=bf&srt=sco&sv=2024-11-04&se=2030-01-01T00%3A00%3A00Z&spr=https%2Chttp&sig=%2B%2F%3D%3D",
+    );
+  });
+
+  test("rejects credentials that cannot sign Account SAS tokens", async () => {
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net");
+
+    await expect(client.generateAccountSasUrl(new Date("2030-01-01T00:00:00Z"), { permissions: "r" })).rejects.toThrow(
+      "requires a StorageSharedKeyCredential",
+    );
+  });
+
+  test.each([
+    ["invalid expiry", new Date(Number.NaN), { permissions: "r" }],
+    ["empty permissions", new Date("2030-01-01T00:00:00Z"), { permissions: "" }],
+    ["invalid permissions", new Date("2030-01-01T00:00:00Z"), { permissions: "q" }],
+    ["invalid services", new Date("2030-01-01T00:00:00Z"), { permissions: "r", services: "z" }],
+    ["empty services", new Date("2030-01-01T00:00:00Z"), { permissions: "r", services: "" }],
+    ["invalid resource types", new Date("2030-01-01T00:00:00Z"), { permissions: "r", resourceTypes: "z" }],
+    ["empty resource types", new Date("2030-01-01T00:00:00Z"), { permissions: "r", resourceTypes: "" }],
+    ["unsupported protocol", new Date("2030-01-01T00:00:00Z"), { permissions: "r", protocol: "http" }],
+  ])("rejects %s", async (_name, expiry, options) => {
+    const credential = new StorageSharedKeyCredential("myaccount", "AQID");
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", credential);
+
+    await expect(client.generateAccountSasUrl(expiry, options)).rejects.toThrow();
+  });
+});
+
+describe("Blob Shared Key content length canonicalization", () => {
+  test.each([
+    { name: "zero", body: "", wireContentLength: "0", signedContentLength: "" },
+    { name: "absent", body: undefined, wireContentLength: null, signedContentLength: "" },
+    { name: "nonzero", body: "abc", wireContentLength: "3", signedContentLength: "3" },
+  ])("canonicalizes $name content length", async ({ body, wireContentLength, signedContentLength }) => {
+    let requestHeaders: Headers | undefined;
+    const fetcher = createFetchMock([
+      (_url, init) => {
+        requestHeaders = new Headers(init.headers);
+        return textResponse("", 201);
+      },
+    ]);
+    const credential = new StorageSharedKeyCredential("myaccount", "AQID");
+    const computeHMACSHA256 = vi.spyOn(credential, "computeHMACSHA256").mockResolvedValue("signature");
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", credential, { fetch: fetcher });
+
+    await client.request("PUT", "https://myaccount.blob.core.windows.net/container/blob", {
+      headers: { "x-ms-date": "Mon, 24 Aug 2026 12:00:00 GMT" },
+      body,
+    });
+
+    expect(requestHeaders?.get("Content-Length") ?? null).toBe(wireContentLength);
+    expect(computeHMACSHA256).toHaveBeenCalledWith(
+      [
+        "PUT",
+        "",
+        "",
+        signedContentLength,
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "x-ms-date:Mon, 24 Aug 2026 12:00:00 GMT\nx-ms-version:2024-11-04",
+        "/myaccount/container/blob",
+      ].join("\n"),
+    );
+  });
+});
+
 describe("BlockBlobClient", () => {
   test("uploads content and sets shared-key auth header", async () => {
     const headers: HeadersInit[] = [];

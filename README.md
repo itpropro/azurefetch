@@ -172,6 +172,16 @@ const secret = await secretClient.getSecret("my-secret");
 console.log(secret.value);
 ```
 
+Account SAS generation requires a shared-key credential and is asynchronous because signing uses Web Crypto:
+
+```ts
+const sharedKey = new StorageSharedKeyCredential("myaccount", "<storage-key>");
+const blobServiceWithSharedKey = new BlobServiceClient("https://myaccount.blob.core.windows.net", sharedKey);
+const accountSasUrl = await blobServiceWithSharedKey.generateAccountSasUrl(new Date(Date.now() + 60 * 60 * 1000), {
+  permissions: "rl",
+});
+```
+
 ## Credentials
 
 `AzureClient` accepts credentials implementing one of:
