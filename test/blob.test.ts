@@ -154,6 +154,50 @@ describe("BlobServiceClient.generateAccountSasUrl", () => {
   });
 });
 
+describe("Blob Shared Key content length canonicalization", () => {
+  test.each([
+    { name: "zero", body: "", wireContentLength: "0", signedContentLength: "" },
+    { name: "absent", body: undefined, wireContentLength: null, signedContentLength: "" },
+    { name: "nonzero", body: "abc", wireContentLength: "3", signedContentLength: "3" },
+  ])("canonicalizes $name content length", async ({ body, wireContentLength, signedContentLength }) => {
+    let requestHeaders: Headers | undefined;
+    const fetcher = createFetchMock([
+      (_url, init) => {
+        requestHeaders = new Headers(init.headers);
+        return textResponse("", 201);
+      },
+    ]);
+    const credential = new StorageSharedKeyCredential("myaccount", "AQID");
+    const computeHMACSHA256 = vi.spyOn(credential, "computeHMACSHA256").mockResolvedValue("signature");
+    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", credential, { fetch: fetcher });
+
+    await client.request("PUT", "https://myaccount.blob.core.windows.net/container/blob", {
+      headers: { "x-ms-date": "Mon, 24 Aug 2026 12:00:00 GMT" },
+      body,
+    });
+
+    expect(requestHeaders?.get("Content-Length") ?? null).toBe(wireContentLength);
+    expect(computeHMACSHA256).toHaveBeenCalledWith(
+      [
+        "PUT",
+        "",
+        "",
+        signedContentLength,
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "x-ms-date:Mon, 24 Aug 2026 12:00:00 GMT\nx-ms-version:2024-11-04",
+        "/myaccount/container/blob",
+      ].join("\n"),
+    );
+  });
+});
+
 describe("BlockBlobClient", () => {
   test("uploads content and sets shared-key auth header", async () => {
     const headers: HeadersInit[] = [];
