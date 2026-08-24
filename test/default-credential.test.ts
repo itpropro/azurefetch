@@ -7,6 +7,7 @@ vi.mock("../src/internal/process", () => ({
 }));
 
 import { getDefaultAzureCredentialToken } from "../src/default-credential";
+import { DefaultAzureCredential } from "../src/default-azure-credential";
 import { TokenRequestError, TokenUnavailableError } from "../src/errors";
 import { executeCommand, hasCommandExecution, isCommandUnavailable } from "../src/internal/process";
 import { createFetchMock, jsonResponse, captureEnv, restoreEnv, unavailableCommandError } from "./helpers";
@@ -85,6 +86,29 @@ describe("getDefaultAzureCredentialToken", () => {
     expect(token.token).toBe("mi-token");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(mockExecuteCommand).not.toHaveBeenCalled();
+  });
+
+  test("forwards a managed identity client ID", async () => {
+    process.env.IDENTITY_ENDPOINT = "https://appservice.azurewebsites.net/identity";
+    process.env.IDENTITY_HEADER = "my-id-token";
+
+    const fetchMock = createFetchMock([
+      (url) => {
+        expect(new URL(url).searchParams.get("client_id")).toBe("user-assigned-client");
+        return jsonResponse({
+          access_token: "mi-token",
+          expires_in: 3600,
+        });
+      },
+    ]);
+
+    const credential = new DefaultAzureCredential({
+      managedIdentityClientId: "user-assigned-client",
+      fetch: fetchMock,
+    });
+    const token = await credential.getToken("scope/.default");
+
+    expect(token.token).toBe("mi-token");
   });
 
   test("falls back to Azure CLI when managed identity is unavailable", async () => {

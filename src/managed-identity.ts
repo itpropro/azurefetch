@@ -5,7 +5,7 @@ import {
   resolveManagedIdentityConfig,
   resolveManagedIdentitySource,
 } from "./internal/msi";
-import { appendQuery, fetchJson } from "./internal/http";
+import { fetchJson } from "./internal/http";
 import { normalizeToken } from "./internal/oauth";
 import { TokenUnavailableError, TokenRequestError } from "./errors";
 import { toFormEntries, toFormUrlEncoded } from "./internal/form";
@@ -64,10 +64,6 @@ export async function getManagedIdentityToken(options: ManagedIdentityOptions): 
     resourceId: options.resourceId,
   });
 
-  if (source === "Imds") {
-    await ensureImdsAvailable(config.endpoint, fetcher, options.probeTimeoutMs);
-  }
-
   if (config.method === "POST") {
     const body = toFormUrlEncoded(
       toFormEntries({
@@ -110,6 +106,10 @@ export async function getManagedIdentityToken(options: ManagedIdentityOptions): 
     url.searchParams.set(key, value);
   }
 
+  if (source === "Imds") {
+    return requestImdsToken(url, config.headers, fetcher, options.probeTimeoutMs);
+  }
+
   const payload = await fetchJson(
     url.toString(),
     {
@@ -122,36 +122,36 @@ export async function getManagedIdentityToken(options: ManagedIdentityOptions): 
   return normalizeToken(payload);
 }
 
-async function ensureImdsAvailable(
-  endpoint: string,
+async function requestImdsToken(
+  url: URL,
+  headers: Record<string, string>,
   fetcher: typeof globalThis.fetch,
   probeTimeoutMs = 1000,
-): Promise<void> {
-  const url = new URL(endpoint);
-  appendQuery(url, "api-version", "2018-02-01");
-
+): Promise<AccessToken> {
   const controller = new AbortController();
   const timeout = setTimeout(() => {
     controller.abort();
   }, probeTimeoutMs);
 
   try {
-    const response = await fetcher(url.toString(), {
-      method: "GET",
-      headers: {
-        Metadata: "true",
+    const payload = await fetchJson(
+      url.toString(),
+      {
+        method: "GET",
+        headers,
+        signal: controller.signal,
       },
-      signal: controller.signal,
-    });
+      fetcher,
+    );
 
-    if (!response.ok) {
-      throw new Error(`IMDS probe returned ${response.status} ${response.statusText}`);
-    }
-
-    return;
+    return normalizeToken(payload);
   } catch (error: unknown) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new TokenUnavailableError("IMDS token endpoint probe timed out", error);
+    }
+
+    if (error instanceof TokenRequestError && error.status != null && error.status < 500) {
+      throw error;
     }
 
     throw new TokenUnavailableError("IMDS endpoint unavailable", error);

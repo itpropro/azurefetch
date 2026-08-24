@@ -5,6 +5,7 @@ import { resolveRequiredScopes, storageOAuthScope } from "./internal/request-cor
 
 export interface DefaultAzureCredentialOptions {
   authorityHost?: string;
+  managedIdentityClientId?: string;
   fetch?: typeof globalThis.fetch;
 }
 
@@ -26,6 +27,7 @@ export class DefaultAzureCredential {
           scope: scopes.length === 1 ? scopes[0] : scopes,
           fetch: this.options.fetch,
           authorityHost: this.options.authorityHost,
+          managedIdentityClientId: this.options.managedIdentityClientId,
         }),
     });
 

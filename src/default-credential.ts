@@ -10,6 +10,7 @@ import type { AccessToken } from "./types";
 interface DefaultAzureCredentialOptions {
   scope: string | string[];
   authorityHost?: string;
+  managedIdentityClientId?: string;
   fetch?: typeof globalThis.fetch;
   probeTimeoutMs?: number;
 }
@@ -52,6 +53,7 @@ export async function getDefaultAzureCredentialToken(options: DefaultAzureCreden
   const managedIdentityToken = await tryAcquireToken(singleDefaultScope, async () =>
     getManagedIdentityToken({
       scope: singleDefaultScope!,
+      clientId: options.managedIdentityClientId,
       fetch: options.fetch,
       probeTimeoutMs: options.probeTimeoutMs,
     }),
