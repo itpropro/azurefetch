@@ -3,6 +3,7 @@ import { getEnvironment, getEnv } from "./internal/env";
 import { resolveRequiredScopes } from "./internal/request-core";
 import { executeCommand, hasCommandExecution, isCommandUnavailable } from "./internal/process";
 import { parseNumericTimestamp } from "./internal/oauth";
+import { sanitizeAuthorityHost } from "./internal/url";
 import { getManagedIdentityToken } from "./managed-identity";
 import { getServicePrincipalToken } from "./service-principal";
 import type { AccessToken } from "./types";
@@ -10,6 +11,7 @@ import type { AccessToken } from "./types";
 interface DefaultAzureCredentialOptions {
   scope: string | string[];
   authorityHost?: string;
+  managedIdentityClientId?: string;
   fetch?: typeof globalThis.fetch;
   probeTimeoutMs?: number;
 }
@@ -22,6 +24,7 @@ interface ExternalCommandTokenPayload {
 }
 
 export async function getDefaultAzureCredentialToken(options: DefaultAzureCredentialOptions): Promise<AccessToken> {
+  const authorityHost = options.authorityHost == null ? undefined : sanitizeAuthorityHost(options.authorityHost);
   const scopes = resolveRequiredScopes(options.scope);
   const environment = getEnvironment();
 
@@ -39,7 +42,7 @@ export async function getDefaultAzureCredentialToken(options: DefaultAzureCreden
         clientId,
         clientSecret,
         scope: scopes,
-        authorityHost: options.authorityHost,
+        authorityHost,
         fetch: options.fetch,
       }),
     );
@@ -52,6 +55,7 @@ export async function getDefaultAzureCredentialToken(options: DefaultAzureCreden
   const managedIdentityToken = await tryAcquireToken(singleDefaultScope, async () =>
     getManagedIdentityToken({
       scope: singleDefaultScope!,
+      clientId: options.managedIdentityClientId,
       fetch: options.fetch,
       probeTimeoutMs: options.probeTimeoutMs,
     }),

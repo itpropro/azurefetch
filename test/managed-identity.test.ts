@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { TokenUnavailableError } from "../src/errors";
 import { getManagedIdentityToken } from "../src/managed-identity";
@@ -140,20 +140,14 @@ describe("getManagedIdentityToken", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  test("queries IMDS after a successful probe", async () => {
-    let probeRequestUrl: URL | undefined;
-    let probeHeaders: Headers | undefined;
-    let tokenRequestUrl: URL | undefined;
+  test("returns a successful IMDS token response without a redundant request", async () => {
+    let requestUrl: URL | undefined;
+    let requestHeaders: Headers | undefined;
 
     const fetchMock = createFetchMock([
       (url, init) => {
-        probeRequestUrl = new URL(url);
-        probeHeaders = new Headers(init.headers);
-
-        return jsonResponse({ probe: true });
-      },
-      (url) => {
-        tokenRequestUrl = new URL(url);
+        requestUrl = new URL(url);
+        requestHeaders = new Headers(init.headers);
 
         return jsonResponse({
           access_token: "imds-token",
@@ -170,16 +164,14 @@ describe("getManagedIdentityToken", () => {
       fetch: fetchMock,
     });
 
-    expect(probeRequestUrl?.pathname).toBe("/metadata/identity/oauth2/token");
-    expect(probeRequestUrl?.searchParams.get("api-version")).toBe("2018-02-01");
-    expect(probeRequestUrl?.searchParams.get("resource")).toBeNull();
-    expect(probeHeaders?.get("Metadata")).toBe("true");
-
-    expect(tokenRequestUrl?.searchParams.get("api-version")).toBe("2018-02-01");
-    expect(tokenRequestUrl?.searchParams.get("resource")).toBe("https://vault.azure.net");
+    expect(requestUrl?.pathname).toBe("/metadata/identity/oauth2/token");
+    expect(requestUrl?.searchParams.get("api-version")).toBe("2018-02-01");
+    expect(requestUrl?.searchParams.get("resource")).toBe("https://vault.azure.net");
+    expect(requestUrl?.searchParams.get("object_id")).toBe("object-1");
+    expect(requestHeaders?.get("Metadata")).toBe("true");
 
     expect(token.token).toBe("imds-token");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   test("throws token unavailable on IMDS probe failure", async () => {
@@ -197,6 +189,25 @@ describe("getManagedIdentityToken", () => {
         fetch: fetchMock,
       }),
     ).rejects.toBeInstanceOf(TokenUnavailableError);
+  });
+
+  test("cancels an unavailable IMDS request after the configured timeout", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, init: RequestInit = {}) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        }),
+    );
+
+    await expect(
+      getManagedIdentityToken({
+        scope: "https://vault.azure.net/.default",
+        fetch: fetchMock,
+        probeTimeoutMs: 1,
+      }),
+    ).rejects.toThrow("IMDS token endpoint probe timed out");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   test("translates endpoint token errors", async () => {

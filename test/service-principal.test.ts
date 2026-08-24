@@ -1,9 +1,26 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { getServicePrincipalToken } from "../src/service-principal";
 import { createFetchMock, getBodyString, jsonResponse } from "./helpers";
 
 describe("getServicePrincipalToken", () => {
+  test("rejects an HTTP authority before token acquisition", async () => {
+    const fetcher = vi.fn<typeof fetch>();
+
+    await expect(
+      getServicePrincipalToken({
+        tenantId: "tenant",
+        clientId: "client",
+        clientSecret: "secret",
+        scope: "scope/.default",
+        authorityHost: "http://identity.test",
+        fetch: fetcher,
+      }),
+    ).rejects.toThrow("authorityHost must use HTTPS");
+
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   test("validates tenant, client, and client secret", async () => {
     const fetchMock = createFetchMock([() => jsonResponse({ access_token: "x", expires_in: 3600 })]);
 

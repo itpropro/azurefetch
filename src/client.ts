@@ -1,4 +1,5 @@
 import { resolveAuthorizationHeader, type AzureRequestCredential } from "./internal/request-core";
+import { sanitizeAuthorityHost } from "./internal/url";
 import type { TokenProvider } from "./types";
 
 type AzureClientCredential = AzureRequestCredential;
@@ -32,7 +33,7 @@ export class AzureClient {
     this.fetcher = options.fetch ?? globalThis.fetch;
     this.defaultCredential = options.credential;
     this.defaultScope = options.scope;
-    this.defaultAuthorityHost = options.authorityHost;
+    this.defaultAuthorityHost = normalizeAuthorityHost(options.authorityHost);
   }
 
   public async fetch(input: RequestInfo | URL, init: AzureRequestInit = {}): Promise<Response> {
@@ -50,7 +51,7 @@ export class AzureClient {
   private async getAuthorizationHeader(overrides: AzureRequestOverrides | undefined): Promise<string> {
     const credential = overrides?.credential ?? this.defaultCredential;
     const scope = overrides?.scope ?? this.defaultScope;
-    const authorityHost = overrides?.authorityHost;
+    const authorityHost = normalizeAuthorityHost(overrides?.authorityHost);
 
     return resolveAuthorizationHeader({
       credential,
@@ -67,4 +68,8 @@ export class AzureClient {
     const { azure: _azure, ...requestInit } = init;
     return requestInit;
   }
+}
+
+function normalizeAuthorityHost(authorityHost: string | undefined): string | undefined {
+  return authorityHost == null ? undefined : sanitizeAuthorityHost(authorityHost);
 }

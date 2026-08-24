@@ -181,6 +181,8 @@ console.log(secret.value);
 
 If no credential is provided, it falls back to the default token loader from the main package.
 
+Custom authority hosts, Key Vault URLs, and App Configuration endpoints must use HTTPS.
+
 ### Default credential chain
 
 `getDefaultAzureCredentialToken` tries credentials in this order:
