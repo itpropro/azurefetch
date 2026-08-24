@@ -12,16 +12,20 @@ describe("AzureClient", () => {
     vi.restoreAllMocks();
   });
 
-  test("uses the default scope for token credential fallback", async () => {
+  test.each([
+    { tokenType: undefined, expectedScheme: "Bearer" },
+    { tokenType: "Bearer" as const, expectedScheme: "Bearer" },
+    { tokenType: "pop" as const, expectedScheme: "pop" },
+  ])("uses $expectedScheme for token credentials with tokenType=$tokenType", async ({ tokenType, expectedScheme }) => {
     const getToken = vi.fn(async () => ({
       token: "token-value",
-      tokenType: "Bearer" as const,
+      tokenType,
       expiresOnTimestamp: Date.now() + 60_000,
     }));
 
     const request = await new AzureClient({ credential: { getToken } }).sign("https://example.com");
 
-    expect(request.headers.get("Authorization")).toBe("Bearer token-value");
+    expect(request.headers.get("Authorization")).toBe(`${expectedScheme} token-value`);
     expect(getToken).toHaveBeenCalledWith(["https://storage.azure.com/.default"]);
   });
 

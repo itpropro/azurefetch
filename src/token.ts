@@ -14,5 +14,5 @@ export function shouldRefreshToken(token: AccessToken, options?: TokenReuseOptio
 }
 
 export function getAuthorizationHeader(token: AccessToken): string {
-  return `Bearer ${token.token}`;
+  return `${token.tokenType ?? "Bearer"} ${token.token}`;
 }
