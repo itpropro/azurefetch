@@ -2,6 +2,7 @@ import { AzureFetchError } from "./errors";
 import { appConfigurationOAuthScope, type AzureRequestCredential } from "./internal/request-core";
 import { decodeBase64ToBytes, encodeBytesToBase64, encodeUtf8 } from "./internal/storage-encoding";
 import { AzureClient, type AzureRequestInit, type AzureRequestOverrides } from "./client";
+import { requireHttpsUrl } from "./internal/url";
 
 const defaultApiVersion = "2023-11-01";
 const configurationSettingContentType = "application/vnd.microsoft.appconfig.kv+json";
@@ -340,7 +341,6 @@ export class AppConfigurationClient {
 
   private addSyncTokenHeaderValue(value: string | undefined): void {
     if (value == null || value.length === 0) {
-      this.syncTokens.clear();
       return;
     }
 
@@ -488,7 +488,7 @@ function stripPrefix(key: string, prefix: string | undefined): string {
 }
 
 function normalizeEndpoint(endpoint: string): string {
-  const url = new URL(endpoint);
+  const url = requireHttpsUrl(endpoint, "endpoint");
   url.pathname = url.pathname.replace(/\/+$/, "");
   url.search = "";
   url.hash = "";

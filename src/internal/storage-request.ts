@@ -83,7 +83,8 @@ export async function applyTableSharedKeyLiteAuth(
 function buildBlobStringToSign(method: string, url: URL, headers: Headers, accountName: string): string {
   const contentEncoding = headers.get("Content-Encoding") ?? "";
   const contentLanguage = headers.get("Content-Language") ?? "";
-  const contentLength = headers.get("Content-Length") ?? "";
+  const contentLengthHeader = headers.get("Content-Length");
+  const contentLength = contentLengthHeader === "0" ? "" : (contentLengthHeader ?? "");
   const contentMd5 = headers.get("Content-MD5") ?? "";
   const contentType = headers.get("Content-Type") ?? "";
   const date = "";

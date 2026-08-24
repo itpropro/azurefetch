@@ -22,6 +22,9 @@ const xmsServiceVersion = storageServiceVersion;
 const odataVersions = "3.0;NetFx";
 // Azure Table service caps paged queries at 1,000 entities per request.
 const maxTablePageSize = 1000;
+const maxTableTransactionActions = 100;
+const maxTableTransactionBytes = 4 * 1024 * 1024;
+const transactionLineEnding = "\r\n";
 
 interface TableClientOptions {
   fetch?: typeof globalThis.fetch;
@@ -381,103 +384,28 @@ export class TableClient {
   }
 
   public async submitTransaction(actions: TableTransactionAction[]): Promise<TableTransactionResponse> {
-    const subResponses: Array<{ status: number }> = [];
+    const preparedActions = prepareTransactionActions(actions, this.url);
+    const batchId = crypto.randomUUID();
+    const changesetId = crypto.randomUUID();
+    const body = buildTransactionBody(preparedActions, batchId, changesetId);
 
-    for (const action of actions) {
-      switch (action.action) {
-        case "create": {
-          const partitionKey = getPartitionKey(action.entity);
-          const rowKey = getRowKey(action.entity);
-          const payload = normalizeEntityPayload(action.entity, partitionKey, rowKey);
-
-          const response = await this.request("POST", this.url, {
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json;odata=nometadata",
-              Prefer: "return-no-content",
-            },
-            body: JSON.stringify(payload),
-          });
-
-          if (!response.ok) {
-            throw new Error(`Table transaction create failed: ${response.status} ${response.statusText}`);
-          }
-
-          subResponses.push({ status: response.status });
-          break;
-        }
-
-        case "update":
-        case "upsert": {
-          const partitionKey = getPartitionKey(action.entity);
-          const rowKey = getRowKey(action.entity);
-          const payload = normalizeEntityPayload(action.entity, partitionKey, rowKey);
-
-          const response = await this.request("PUT", entityUrl(this.url, partitionKey, rowKey), {
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json;odata=nometadata",
-              Prefer: "return-no-content",
-              "If-Match": "*",
-            },
-            body: JSON.stringify(payload),
-          });
-
-          if (response.ok || response.status === 204) {
-            subResponses.push({ status: response.status });
-            break;
-          }
-
-          if (action.action === "update") {
-            throw new Error(`Table transaction update failed: ${response.status} ${response.statusText}`);
-          }
-
-          if (response.status !== 404) {
-            throw new Error(`Table transaction upsert failed: ${response.status} ${response.statusText}`);
-          }
-
-          const insertResponse = await this.request("POST", this.url, {
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json;odata=nometadata",
-              Prefer: "return-no-content",
-            },
-            body: JSON.stringify(payload),
-          });
-
-          if (!insertResponse.ok && insertResponse.status !== 204) {
-            throw new Error(`Table transaction upsert failed: ${insertResponse.status} ${insertResponse.statusText}`);
-          }
-
-          subResponses.push({ status: insertResponse.status });
-          break;
-        }
-
-        case "delete": {
-          const response = await this.request("DELETE", entityUrl(this.url, action.partitionKey, action.rowKey), {
-            headers: {
-              "If-Match": "*",
-            },
-          });
-
-          if (!response.ok) {
-            throw new Error(`Table transaction delete failed: ${response.status} ${response.statusText}`);
-          }
-
-          subResponses.push({ status: response.status });
-          break;
-        }
-
-        default: {
-          throw new Error(`Unsupported table transaction action: ${action.action}`);
-        }
-      }
+    if (new TextEncoder().encode(body).byteLength > maxTableTransactionBytes) {
+      throw new TypeError("Table transaction payload must not exceed 4 MiB");
     }
 
-    return {
-      status: actions.length > 0 ? 202 : 204,
-      subResponses,
-    };
+    const response = await this.request("POST", appendToURLPath(this.serviceUrl, "$batch"), {
+      headers: {
+        Accept: "application/json",
+        "Content-Type": `multipart/mixed; boundary=batch_${batchId}`,
+      },
+      body,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Table transaction failed: ${response.status} ${response.statusText}`);
+    }
+
+    return parseTransactionResponse(response.status, await response.text(), actions.length);
   }
 
   private async *listEntitiesByPage(options?: {
@@ -653,6 +581,143 @@ function entityUrl(serviceUrl: string, partitionKey: string, rowKey: string): st
 function buildTableResourceUrl(serviceUrl: string, tableName: string): string {
   const encodedName = encodeURIComponent(tableName.replaceAll("'", "''"));
   return `${serviceUrl.replace(/\/$/, "")}/Tables('${encodedName}')`;
+}
+
+interface PreparedTransactionAction {
+  method: "DELETE" | "POST" | "PUT";
+  url: string;
+  body?: string;
+  ifMatch?: string;
+}
+
+function prepareTransactionActions(actions: TableTransactionAction[], tableUrl: string): PreparedTransactionAction[] {
+  if (actions.length === 0) {
+    throw new TypeError("Table transaction must contain at least one action");
+  }
+
+  if (actions.length > maxTableTransactionActions) {
+    throw new TypeError("Table transaction must not contain more than 100 actions");
+  }
+
+  const normalizedTableUrl = withoutQuery(tableUrl);
+  let partitionKey: string | undefined;
+  const entityTargets = new Set<string>();
+
+  return actions.map((action) => {
+    const keys = getTransactionActionKeys(action);
+    partitionKey ??= keys.partitionKey;
+    if (keys.partitionKey !== partitionKey) {
+      throw new TypeError("All table transaction actions must use the same partition key");
+    }
+
+    const target = `${keys.partitionKey}\u0000${keys.rowKey}`;
+    if (entityTargets.has(target)) {
+      throw new TypeError("Table transaction cannot contain duplicate entity targets");
+    }
+    entityTargets.add(target);
+
+    switch (action.action) {
+      case "create":
+        return {
+          method: "POST",
+          url: normalizedTableUrl,
+          body: JSON.stringify(normalizeEntityPayload(action.entity, keys.partitionKey, keys.rowKey)),
+        };
+      case "update":
+        return {
+          method: "PUT",
+          url: entityUrl(normalizedTableUrl, keys.partitionKey, keys.rowKey),
+          body: JSON.stringify(normalizeEntityPayload(action.entity, keys.partitionKey, keys.rowKey)),
+          ifMatch: "*",
+        };
+      case "upsert":
+        return {
+          method: "PUT",
+          url: entityUrl(normalizedTableUrl, keys.partitionKey, keys.rowKey),
+          body: JSON.stringify(normalizeEntityPayload(action.entity, keys.partitionKey, keys.rowKey)),
+        };
+      case "delete":
+        return {
+          method: "DELETE",
+          url: entityUrl(normalizedTableUrl, keys.partitionKey, keys.rowKey),
+          ifMatch: "*",
+        };
+      default:
+        throw new TypeError("Unsupported table transaction action");
+    }
+  });
+}
+
+function getTransactionActionKeys(action: TableTransactionAction): { partitionKey: string; rowKey: string } {
+  if (action.action === "delete") {
+    return { partitionKey: action.partitionKey, rowKey: action.rowKey };
+  }
+
+  return {
+    partitionKey: getPartitionKey(action.entity),
+    rowKey: getRowKey(action.entity),
+  };
+}
+
+function buildTransactionBody(actions: PreparedTransactionAction[], batchId: string, changesetId: string): string {
+  const batchBoundary = `batch_${batchId}`;
+  const changesetBoundary = `changeset_${changesetId}`;
+  const parts = [`--${batchBoundary}`, `Content-Type: multipart/mixed; boundary=${changesetBoundary}`, ""];
+
+  for (const [index, action] of actions.entries()) {
+    parts.push(
+      `--${changesetBoundary}`,
+      "Content-Type: application/http",
+      "Content-Transfer-Encoding: binary",
+      `Content-ID: ${index + 1}`,
+      "",
+      `${action.method} ${action.url} HTTP/1.1`,
+      "Accept: application/json;odata=nometadata",
+    );
+
+    if (action.body != null) {
+      parts.push(
+        "Content-Type: application/json",
+        "Prefer: return-no-content",
+        `Content-Length: ${new TextEncoder().encode(action.body).byteLength}`,
+      );
+    }
+
+    if (action.ifMatch != null) {
+      parts.push(`If-Match: ${action.ifMatch}`);
+    }
+
+    parts.push("", action.body ?? "");
+  }
+
+  parts.push(`--${changesetBoundary}--`, `--${batchBoundary}--`, "");
+  return parts.join(transactionLineEnding);
+}
+
+function parseTransactionResponse(status: number, body: string, expectedResponses: number): TableTransactionResponse {
+  const subResponses = [...body.matchAll(/HTTP\/1\.[01] ([0-9]{3})/g)].map((match) => ({
+    status: Number(match[1]),
+  }));
+
+  const failedResponse = subResponses.find((response) => response.status < 200 || response.status >= 300);
+  if (failedResponse != null) {
+    throw new Error(`Table transaction failed: subresponse returned ${failedResponse.status}`);
+  }
+
+  if (subResponses.length !== expectedResponses) {
+    throw new Error(
+      `Table transaction response contained ${subResponses.length} subresponses; expected ${expectedResponses}`,
+    );
+  }
+
+  return { status, subResponses };
+}
+
+function withoutQuery(rawUrl: string): string {
+  const url = new URL(rawUrl);
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
 }
 
 function hasAuthorizationCredential(credential: CredentialLike): credential is AuthorizationCredential {

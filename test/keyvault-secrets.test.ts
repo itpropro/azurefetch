@@ -10,6 +10,33 @@ import {
 import { createFetchMock, getBodyString, jsonResponse, textResponse } from "./helpers";
 
 describe("KeyVaultSecretClient", () => {
+  test("rejects HTTP vault and authority URLs during construction", () => {
+    const credential = { getAuthorizationHeader: vi.fn(async () => "Bearer token") };
+    const fetcher = vi.fn<typeof fetch>();
+
+    expect(() => new KeyVaultSecretClient("http://example.vault.azure.net", credential, { fetch: fetcher })).toThrow(
+      "vaultUrl must use HTTPS",
+    );
+    expect(
+      () =>
+        new KeyVaultSecretClient("https://private.vault.local", credential, {
+          authorityHost: "http://identity.test",
+          fetch: fetcher,
+        }),
+    ).toThrow("authorityHost must use HTTPS");
+    expect(credential.getAuthorizationHeader).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  test("supports HTTPS sovereign and private-link vault hosts", () => {
+    expect(createClient(vi.fn<typeof fetch>()).url).toBe("https://example.vault.azure.net");
+    expect(
+      new KeyVaultSecretClient("https://vault.private-link.internal", undefined, {
+        authorityHost: "https://login.microsoftonline.us",
+      }).url,
+    ).toBe("https://vault.private-link.internal");
+  });
+
   describe("setSecret", () => {
     test("sends the default Key Vault scope and serializes secret attributes", async () => {
       const expiresOn = new Date("2027-01-01T00:00:00.000Z");
@@ -321,6 +348,70 @@ describe("KeyVaultSecretClient", () => {
           }),
         ],
       ]);
+    });
+
+    test("follows a relative continuation link on the configured vault", async () => {
+      const requests: string[] = [];
+      const fetcher = createFetchMock([
+        (url) => {
+          requests.push(url);
+          return jsonResponse({
+            value: [],
+            nextLink: "/secrets?api-version=7.6&skiptoken=relative-page",
+          });
+        },
+        (url) => {
+          requests.push(url);
+          return jsonResponse({ value: [] });
+        },
+      ]);
+
+      const client = createClient(fetcher);
+      const pages: SecretProperties[][] = [];
+      for await (const page of client.listPropertiesOfSecrets().byPage()) {
+        pages.push(page.value);
+      }
+
+      expect(pages).toHaveLength(2);
+      expect(requests).toEqual([
+        "https://example.vault.azure.net/secrets?api-version=7.6",
+        "https://example.vault.azure.net/secrets?api-version=7.6&skiptoken=relative-page",
+      ]);
+    });
+
+    test("accepts a same-origin continuation on a private vault host", async () => {
+      const fetcher = createFetchMock([
+        (url) => {
+          expect(url).toBe("https://vault.private.internal/secrets?skiptoken=next&api-version=7.6");
+          return jsonResponse({ value: [] });
+        },
+      ]);
+      const client = new KeyVaultSecretClient(
+        "https://vault.private.internal",
+        { getAuthorizationHeader: async () => "Bearer token" },
+        { fetch: fetcher },
+      );
+      const pages = client
+        .listPropertiesOfSecrets()
+        .byPage({ continuationToken: "https://vault.private.internal/secrets?skiptoken=next" });
+
+      await expect(pages[Symbol.asyncIterator]().next()).resolves.toMatchObject({ done: false });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    test.each([
+      ["malformed", "http://[", "Invalid Key Vault continuation URL"],
+      ["non-HTTPS", "http://example.vault.azure.net/secrets?skiptoken=next", "must use HTTPS"],
+      ["cross-origin", "https://attacker.example/secrets?skiptoken=next", "configured vault origin"],
+    ])("rejects a %s continuation before authorization or dispatch", async (_case, continuationToken, message) => {
+      const getAuthorizationHeader = vi.fn(async () => "Bearer vault-token");
+      const fetcher = vi.fn<typeof fetch>();
+      const client = createClient(fetcher, { getAuthorizationHeader });
+      const pages = client.listPropertiesOfSecrets().byPage({ continuationToken })[Symbol.asyncIterator]();
+
+      await expect(pages.next()).rejects.toThrow(message);
+      expect(getAuthorizationHeader).not.toHaveBeenCalled();
+      expect(fetcher).not.toHaveBeenCalled();
     });
   });
 

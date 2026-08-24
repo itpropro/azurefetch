@@ -15,6 +15,37 @@ describe("AppConfigurationClient", () => {
     vi.unstubAllGlobals();
   });
 
+  test("rejects HTTP endpoints and authority hosts during construction", () => {
+    const credential = { getAuthorizationHeader: vi.fn(async () => "Bearer token") };
+    const fetcher = vi.fn<typeof fetch>();
+
+    expect(() => new AppConfigurationClient("http://example.azconfig.io", credential, { fetch: fetcher })).toThrow(
+      "endpoint must use HTTPS",
+    );
+    expect(
+      () =>
+        new AppConfigurationClient("https://private.azconfig.local", credential, {
+          authorityHost: "http://identity.test",
+          fetch: fetcher,
+        }),
+    ).toThrow("authorityHost must use HTTPS");
+    expect(() =>
+      AppConfigurationClient.fromConnectionString("Endpoint=http://example.azconfig.io;Id=test;Secret=AQID"),
+    ).toThrow("endpoint must use HTTPS");
+    expect(credential.getAuthorizationHeader).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  test("supports HTTPS private-link endpoints with sovereign authority hosts", () => {
+    const client = new AppConfigurationClient(
+      "https://config.private-link.internal",
+      { getAuthorizationHeader: async () => "Bearer token" },
+      { authorityHost: "https://login.microsoftonline.us" },
+    );
+
+    expect(client.url).toBe("https://config.private-link.internal");
+  });
+
   test("uses the public cloud App Configuration scope for AAD requests", async () => {
     const getAuthorizationHeader = vi.fn(async (scope?: string | string[]) => `Bearer ${scope}`);
     const fetcher = createFetchMock([
@@ -243,6 +274,48 @@ describe("AppConfigurationClient", () => {
         etag: '"page-2"',
       },
     ]);
+  });
+
+  test("retains and merges the highest sync token sequence for each ID", async () => {
+    const response = (syncToken?: string) =>
+      new Response(JSON.stringify({ key: "plain", value: "value", etag: '"1"' }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          ...(syncToken !== undefined ? { "sync-token": syncToken } : {}),
+        },
+      });
+    const expectedRequestTokens = [
+      null,
+      "a=MQ==,b=Mg==",
+      "a=MQ==,b=Mg==",
+      "a=aGlnaA==,b=Mg==,c=Mw==",
+      "a=aGlnaA==,b=Mg==,c=Mw==",
+      "a=aGlnaA==,b=Mg==,c=Mw==",
+    ];
+    const responseTokens = [
+      "a=MQ==;sn=5,b=Mg==;sn=2",
+      "a=bG93;sn=4,b=ZXF1YWw=;sn=2",
+      "a=aGlnaA==;sn=6,c=Mw==;sn=1",
+      "",
+      undefined,
+      undefined,
+    ];
+    const fetcher = createFetchMock(
+      responseTokens.map((syncToken, index) => (_url, init) => {
+        expect(new Headers(init.headers).get("Sync-Token")).toBe(expectedRequestTokens[index]);
+        return response(syncToken);
+      }),
+    );
+    const client = new AppConfigurationClient(
+      "https://example.azconfig.io",
+      { getAuthorizationHeader: async () => "Bearer token" },
+      { fetch: fetcher },
+    );
+
+    for (const _ of responseTokens) {
+      await client.getConfigurationSetting("plain");
+    }
   });
 
   test("listConfigurationSettings escapes reserved characters in generated prefix and label filters", async () => {

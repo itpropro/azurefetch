@@ -80,7 +80,7 @@ export async function resolveAuthorizationHeader(input: ResolveAuthorizationInpu
       throw new Error("Unable to resolve a token from the configured credential");
     }
 
-    return `${accessToken.tokenType} ${accessToken.token}`;
+    return `${accessToken.tokenType ?? "Bearer"} ${accessToken.token}`;
   }
 
   const provider = getTokenProvider({

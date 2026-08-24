@@ -2,16 +2,25 @@ import { createTokenProvider } from "./provider";
 import { getDefaultAzureCredentialToken } from "./default-credential";
 import type { AccessToken, TokenProvider } from "./types";
 import { resolveRequiredScopes, storageOAuthScope } from "./internal/request-core";
+import { sanitizeAuthorityHost } from "./internal/url";
 
 export interface DefaultAzureCredentialOptions {
   authorityHost?: string;
+  managedIdentityClientId?: string;
   fetch?: typeof globalThis.fetch;
 }
 
 export class DefaultAzureCredential {
   private readonly providers = new Map<string, TokenProvider>();
 
-  constructor(private readonly options: DefaultAzureCredentialOptions = {}) {}
+  private readonly options: DefaultAzureCredentialOptions;
+
+  constructor(options: DefaultAzureCredentialOptions = {}) {
+    this.options = {
+      ...options,
+      authorityHost: options.authorityHost == null ? undefined : sanitizeAuthorityHost(options.authorityHost),
+    };
+  }
 
   private getTokenProvider(scopes: string[]): TokenProvider {
     const cacheKey = JSON.stringify(scopes);
@@ -26,6 +35,7 @@ export class DefaultAzureCredential {
           scope: scopes.length === 1 ? scopes[0] : scopes,
           fetch: this.options.fetch,
           authorityHost: this.options.authorityHost,
+          managedIdentityClientId: this.options.managedIdentityClientId,
         }),
     });
 
@@ -42,6 +52,6 @@ export class DefaultAzureCredential {
   public async getAuthorizationHeader(scopes: string | string[] = storageOAuthScope): Promise<string> {
     const normalizedScopes = resolveRequiredScopes(scopes);
     const token = await this.getToken(normalizedScopes);
-    return `${token.tokenType} ${token.token}`;
+    return `${token.tokenType ?? "Bearer"} ${token.token}`;
   }
 }

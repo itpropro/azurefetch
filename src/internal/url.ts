@@ -1,10 +1,17 @@
 export function sanitizeAuthorityHost(authorityHost: string): string {
   const trimmed = authorityHost.trim();
-  if (!/^https?:\/\//i.test(trimmed)) {
-    throw new TypeError("authorityHost must start with http:// or https://");
-  }
+  requireHttpsUrl(trimmed, "authorityHost");
 
   return trimmed.replace(/\/+$/, "");
+}
+
+export function requireHttpsUrl(input: string, name: string): URL {
+  const url = new URL(input);
+  if (url.protocol !== "https:") {
+    throw new TypeError(`${name} must use HTTPS`);
+  }
+
+  return url;
 }
 
 export function joinPath(base: string, path: string): string {

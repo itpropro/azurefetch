@@ -12,16 +12,43 @@ describe("AzureClient", () => {
     vi.restoreAllMocks();
   });
 
-  test("uses the default scope for token credential fallback", async () => {
+  test("rejects an HTTP default authority during construction", () => {
+    expect(() => new AzureClient({ authorityHost: "http://identity.test" })).toThrow("authorityHost must use HTTPS");
+  });
+
+  test("rejects an HTTP request authority before credential acquisition", async () => {
+    const getAuthorizationHeader = vi.fn(async () => "Bearer token");
+    const client = new AzureClient({ credential: { getAuthorizationHeader } });
+
+    await expect(
+      client.sign("https://example.com", {
+        azure: { authorityHost: "http://identity.test" },
+      }),
+    ).rejects.toThrow("authorityHost must use HTTPS");
+
+    expect(getAuthorizationHeader).not.toHaveBeenCalled();
+  });
+
+  test("rejects an HTTP DefaultAzureCredential authority during construction", () => {
+    expect(() => new DefaultAzureCredential({ authorityHost: "http://identity.test" })).toThrow(
+      "authorityHost must use HTTPS",
+    );
+  });
+
+  test.each([
+    { tokenType: undefined, expectedScheme: "Bearer" },
+    { tokenType: "Bearer" as const, expectedScheme: "Bearer" },
+    { tokenType: "pop" as const, expectedScheme: "pop" },
+  ])("uses $expectedScheme for token credentials with tokenType=$tokenType", async ({ tokenType, expectedScheme }) => {
     const getToken = vi.fn(async () => ({
       token: "token-value",
-      tokenType: "Bearer" as const,
+      tokenType,
       expiresOnTimestamp: Date.now() + 60_000,
     }));
 
     const request = await new AzureClient({ credential: { getToken } }).sign("https://example.com");
 
-    expect(request.headers.get("Authorization")).toBe("Bearer token-value");
+    expect(request.headers.get("Authorization")).toBe(`${expectedScheme} token-value`);
     expect(getToken).toHaveBeenCalledWith(["https://storage.azure.com/.default"]);
   });
 
