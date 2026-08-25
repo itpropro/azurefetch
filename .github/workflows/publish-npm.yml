@@ -89,7 +89,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          package_file="$(npm pack --json --ignore-scripts | jq -r '.[0].filename')"
+          package_file="$(npm pack --json --ignore-scripts | jq -er 'to_entries | select(length == 1) | .[0].value.filename')"
           test -f "$package_file"
           echo "package_file=$package_file" >> "$GITHUB_OUTPUT"
 
