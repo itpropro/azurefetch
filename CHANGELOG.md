@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/itpropro/azurefetch/compare/v0.2.0...v0.3.0) (2026-08-25)
+
+
+### Features
+
+* **core:** add bounded developer authentication ([#22](https://github.com/itpropro/azurefetch/issues/22)) ([46a3473](https://github.com/itpropro/azurefetch/commit/46a34737a3502d9bfe11f42f80cce9c540506e59)), closes [#19](https://github.com/itpropro/azurefetch/issues/19)
+
 ## [0.2.0](https://github.com/itpropro/azurefetch/compare/v0.1.0...v0.2.0) (2026-08-25)
 
 ### Features
