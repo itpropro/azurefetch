@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.1](https://github.com/itpropro/azurefetch/compare/v0.3.0...v0.3.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **release:** declare npm provenance repository ([#29](https://github.com/itpropro/azurefetch/issues/29)) ([a503299](https://github.com/itpropro/azurefetch/commit/a503299c27a730867097603ee395040fa29e49b0))
+* **release:** ignore generated changelog formatting ([#26](https://github.com/itpropro/azurefetch/issues/26)) ([a8ae05e](https://github.com/itpropro/azurefetch/commit/a8ae05e33a16a83f5ec747d1d10044b50a303b99))
+* **release:** parse npm 12 pack output ([#28](https://github.com/itpropro/azurefetch/issues/28)) ([fc1d2af](https://github.com/itpropro/azurefetch/commit/fc1d2affc3041238fb22a1ad7eb48dc994a19914))
+
 ## [0.3.0](https://github.com/itpropro/azurefetch/compare/v0.2.0...v0.3.0) (2026-08-25)
 
 
