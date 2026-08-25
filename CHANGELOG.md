@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/itpropro/azurefetch/compare/v0.3.1...v0.3.2) (2026-08-25)
+
+
+### Bug Fixes
+
+* **release:** harden npm publication boundary ([#36](https://github.com/itpropro/azurefetch/issues/36)) ([4d83f4c](https://github.com/itpropro/azurefetch/commit/4d83f4c34e2cc6a23904dec1d53765b48f82b909))
+
 ## [0.3.1](https://github.com/itpropro/azurefetch/compare/v0.3.0...v0.3.1) (2026-08-25)
 
 
