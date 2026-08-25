@@ -1,11 +1,11 @@
 # azurefetch
 
-[![npm version](https://img.shields.io/npm/v/%40itpropro%2Fazurefetch?style=flat&colorA=18181B&colorB=F59E0B)](https://www.npmjs.com/package/azurefetch)
-[![bundle size](https://img.shields.io/bundlephobia/minzip/%40itpropro%2Fazurefetch?style=flat&colorA=18181B&colorB=F59E0B)](https://bundlephobia.com/package/azurefetch)
+[![npm version](https://img.shields.io/npm/v/azurefetch?style=flat&colorA=18181B&colorB=F59E0B)](https://www.npmjs.com/package/azurefetch)
+[![bundle size](https://img.shields.io/bundlephobia/minzip/azurefetch?style=flat&colorA=18181B&colorB=F59E0B)](https://bundlephobia.com/package/azurefetch)
 
 Fetch-first Azure utilities for modern runtimes.
 
-`azurefetch` is a no dependency fetch focused library to interact with azure resources, mainly storage and config related resources like key vault and app config. It focuses on an implementation that works well in workers, browsers, Bun, Deno, and Node without pulling in a large dependency graph and makes interacting with basic Azure resources easier.
+`azurefetch` is a dependency-free TypeScript library for a focused subset of Azure Storage, Key Vault secrets, and App Configuration. It uses the platform `fetch`, `Request`, `Response`, and Web Crypto APIs, so the same package works in browsers, workers, Bun, Deno, and Node.
 
 ## Why azurefetch?
 
@@ -15,6 +15,34 @@ Fetch-first Azure utilities for modern runtimes.
 - Easy auth story with explicit credentials or a default credential chain
 - Small, focused client surfaces for Blob, Table, Key Vault secrets, and App Configuration keys
 - Tree-shakeable ESM exports with a simple root API
+
+## Current status
+
+The current release is `azurefetch@0.3.2`. It ships one ESM entrypoint targeting ES2022, includes TypeScript declarations, and has no runtime dependencies.
+
+| Area              | Implemented operations                                                                                                                         |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authentication    | Service principal, managed identity, Azure CLI, Azure PowerShell, token credentials, header credentials                                        |
+| Blob Storage      | Connection strings; container create, delete, existence, and listing; blob upload, download, properties, and delete; batch delete; account SAS |
+| Table Storage     | Connection strings; table create and delete; entity get, upsert, delete, and listing; atomic transactions                                      |
+| Key Vault secrets | Secret set, get, update, delete, recover, and purge; secret, deleted secret, and version listing                                               |
+| App Configuration | Key-value get, set, delete, and listing; prefixes, labels, filters, connection strings, and sync tokens                                        |
+
+This is a focused client library, not a drop-in replacement for the full Azure SDK packages.
+
+### Default protocol versions
+
+| Service or protocol           | Version      |
+| ----------------------------- | ------------ |
+| Azure Blob and Table REST     | `2024-11-04` |
+| Azure Tables OData headers    | `3.0;NetFx`  |
+| Azure App Configuration       | `2023-11-01` |
+| Azure Key Vault               | `7.6`        |
+| Managed identity, App Service | `2019-08-01` |
+| Managed identity, Cloud Shell | `2017-09-01` |
+| Managed identity, IMDS        | `2018-02-01` |
+
+App Configuration accepts an `apiVersion` override. The other values are the defaults used by the current implementation.
 
 ## Installation
 
