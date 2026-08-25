@@ -1,6 +1,6 @@
 {
   "name": "azurefetch",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Minimal dependency-free Azure fetch utilities",
   "license": "MIT",
   "repository": {
