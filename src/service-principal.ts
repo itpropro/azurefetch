@@ -11,6 +11,7 @@ export interface ServicePrincipalOptions {
   clientSecret: string;
   scope: string | string[];
   authorityHost?: string;
+  abortSignal?: AbortSignal;
   fetch?: typeof globalThis.fetch;
 }
 
@@ -38,6 +39,7 @@ export async function getServicePrincipalToken(options: ServicePrincipalOptions)
   if (fetcher == null) {
     throw new TokenUnavailableError("Fetch is not available");
   }
+  options.abortSignal?.throwIfAborted();
 
   const host = sanitizeAuthorityHost(options.authorityHost ?? "https://login.microsoftonline.com");
   const tokenUrl = joinPath(host, `/${tenantId}/oauth2/v2.0/token`);
@@ -59,9 +61,14 @@ export async function getServicePrincipalToken(options: ServicePrincipalOptions)
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: form,
+      signal: options.abortSignal,
     },
     fetcher,
   ).catch((error: unknown) => {
+    if (options.abortSignal?.aborted === true) {
+      options.abortSignal.throwIfAborted();
+    }
+
     if (error instanceof TokenRequestError) {
       throw error;
     }

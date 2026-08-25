@@ -5,6 +5,7 @@ export interface CommandExecutionResult {
 
 export interface CommandExecutionOptions {
   env?: Record<string, string | undefined>;
+  abortSignal?: AbortSignal;
 }
 
 interface ProcessLike {
@@ -14,13 +15,18 @@ interface ProcessLike {
   };
 }
 
-interface DenoCommandLike {
+interface DenoChildProcessLike {
   output(): Promise<{
     success: boolean;
     code: number;
     stdout: Uint8Array;
     stderr: Uint8Array;
   }>;
+  kill(signo?: string): void;
+}
+
+interface DenoCommandLike {
+  spawn(): DenoChildProcessLike;
 }
 
 interface DenoCommandCtor {
@@ -43,6 +49,7 @@ interface CommandOutputStream {
 interface SpawnedCommandLike {
   stdout: CommandOutputStream;
   stderr: CommandOutputStream;
+  kill(): boolean;
   on(event: "error", listener: (error: Error) => void): void;
   on(event: "close", listener: (code: number | null) => void): void;
 }
@@ -157,6 +164,8 @@ export async function executeCommand(
   args: string[],
   options: CommandExecutionOptions = {},
 ): Promise<CommandExecutionResult> {
+  options.abortSignal?.throwIfAborted();
+
   if (!hasCommandExecution()) {
     throw new Error("Command execution is unavailable");
   }
@@ -170,20 +179,40 @@ export async function executeCommand(
       stdin: "null",
       stdout: "piped",
       stderr: "piped",
-    });
+    }).spawn();
 
-    const result = await child.output();
-    const stdout = decoder.decode(result.stdout);
-    const stderr = decoder.decode(result.stderr);
-
-    if (!result.success) {
-      rejectCommand(command, result.code, stdout, stderr);
-    }
-
-    return {
-      stdout,
-      stderr,
+    const abort = () => {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // The process may have exited between the abort event and kill.
+      }
     };
+    options.abortSignal?.addEventListener("abort", abort, { once: true });
+    if (options.abortSignal?.aborted === true) abort();
+
+    try {
+      const result = await child.output();
+      options.abortSignal?.throwIfAborted();
+      const stdout = decoder.decode(result.stdout);
+      const stderr = decoder.decode(result.stderr);
+
+      if (!result.success) {
+        rejectCommand(command, result.code, stdout, stderr);
+      }
+
+      return {
+        stdout,
+        stderr,
+      };
+    } catch (error: unknown) {
+      if (options.abortSignal?.aborted === true) {
+        options.abortSignal.throwIfAborted();
+      }
+      throw error;
+    } finally {
+      options.abortSignal?.removeEventListener("abort", abort);
+    }
   }
 
   if (!hasNodeCompatibleCommandExecution()) {
@@ -208,6 +237,24 @@ export async function executeCommand(
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+
+    const settle = (complete: () => void) => {
+      if (settled) return;
+      settled = true;
+      options.abortSignal?.removeEventListener("abort", abort);
+      complete();
+    };
+
+    const abort = () => {
+      try {
+        child.kill();
+      } catch (error: unknown) {
+        settle(() => {
+          reject(toError(error, "Failed to terminate command execution"));
+        });
+      }
+    };
 
     child.stdout.on("data", (chunk: unknown) => {
       stdout += String(chunk);
@@ -218,21 +265,50 @@ export async function executeCommand(
     });
 
     child.on("error", (error: Error) => {
-      reject(error);
+      settle(() => {
+        if (options.abortSignal?.aborted === true) {
+          reject(getAbortReason(options.abortSignal));
+          return;
+        }
+        reject(error);
+      });
     });
 
     child.on("close", (code: number | null) => {
-      if (code === 0) {
-        resolve({
-          stdout,
-          stderr,
-        });
-        return;
-      }
+      settle(() => {
+        if (options.abortSignal?.aborted === true) {
+          reject(getAbortReason(options.abortSignal));
+          return;
+        }
+        if (code === 0) {
+          resolve({
+            stdout,
+            stderr,
+          });
+          return;
+        }
 
-      reject(new Error(`Command ${command} exited with code ${code}: ${stderr || stdout}`));
+        reject(new Error(`Command ${command} exited with code ${code}: ${stderr || stdout}`));
+      });
     });
+
+    options.abortSignal?.addEventListener("abort", abort, { once: true });
+    if (options.abortSignal?.aborted === true) abort();
   });
+}
+
+function getAbortReason(signal: AbortSignal): Error {
+  try {
+    signal.throwIfAborted();
+  } catch (error: unknown) {
+    return toError(error, "Command execution aborted");
+  }
+
+  return new Error("Command execution aborted");
+}
+
+function toError(value: unknown, message: string): Error {
+  return value instanceof Error ? value : new Error(message, { cause: value });
 }
 
 function rejectCommand(command: string, code: number, stdout: string, stderr: string): never {
