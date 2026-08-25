@@ -6,7 +6,7 @@ vi.mock("../src/internal/process", () => ({
   executeCommand: vi.fn(),
 }));
 
-import { getDefaultAzureCredentialToken } from "../src/default-credential";
+import { getDefaultAzureCredentialToken, getDeveloperAzureCredentialToken } from "../src/default-credential";
 import { DefaultAzureCredential } from "../src/default-azure-credential";
 import { TokenRequestError, TokenUnavailableError } from "../src/errors";
 import { executeCommand, hasCommandExecution, isCommandUnavailable } from "../src/internal/process";
@@ -262,5 +262,129 @@ describe("getDefaultAzureCredentialToken", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(mockExecuteCommand).toHaveBeenCalledTimes(3);
+  });
+
+  test("uses only Azure CLI when developer credentials are available", async () => {
+    process.env.AZURE_TENANT_ID = "tenant";
+    process.env.AZURE_CLIENT_ID = "client";
+    process.env.AZURE_CLIENT_SECRET = "secret";
+    process.env.IDENTITY_ENDPOINT = "https://appservice.azurewebsites.net/identity";
+    process.env.IDENTITY_HEADER = "my-id-token";
+
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    globalThis.fetch = fetchMock;
+    mockExecuteCommand.mockResolvedValue({
+      stdout: JSON.stringify({
+        accessToken: "cli-token",
+        expires_on: 1_700_000_000_001,
+      }),
+      stderr: "",
+    });
+
+    try {
+      const token = await getDeveloperAzureCredentialToken({ scope: "scope/.default" });
+
+      expect(token.token).toBe("cli-token");
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(mockExecuteCommand).toHaveBeenCalledTimes(1);
+      expect(mockExecuteCommand).toHaveBeenCalledWith("az", [
+        "account",
+        "get-access-token",
+        "--output",
+        "json",
+        "--scope",
+        "scope/.default",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("falls back from Azure CLI to Azure PowerShell for developer credentials", async () => {
+    const controller = new AbortController();
+    mockExecuteCommand.mockImplementation(async (command) => {
+      if (command === "az") {
+        throw unavailableCommandError("az missing");
+      }
+
+      return {
+        stdout: JSON.stringify({
+          accessToken: "powershell-token",
+          expiresOn: "1700000000100",
+        }),
+        stderr: "",
+      };
+    });
+
+    const token = await getDeveloperAzureCredentialToken({
+      scope: "resource/.default",
+      abortSignal: controller.signal,
+    });
+
+    expect(token.token).toBe("powershell-token");
+    expect(mockExecuteCommand.mock.calls.map(([command]) => command)).toEqual(["az", "pwsh"]);
+    expect(mockExecuteCommand.mock.calls.map(([, , options]) => options)).toEqual([
+      { abortSignal: controller.signal },
+      { abortSignal: controller.signal },
+    ]);
+  });
+
+  test("does not try Azure PowerShell after malformed Azure CLI output", async () => {
+    mockExecuteCommand.mockResolvedValue({ stdout: "not json", stderr: "" });
+
+    await expect(getDeveloperAzureCredentialToken({ scope: "scope/.default" })).rejects.toBeInstanceOf(
+      TokenRequestError,
+    );
+    expect(mockExecuteCommand).toHaveBeenCalledTimes(1);
+    expect(mockExecuteCommand).toHaveBeenCalledWith("az", expect.any(Array));
+  });
+
+  test("reports unavailable developer credentials after exhausting command sources", async () => {
+    mockExecuteCommand.mockImplementation(async (command) => {
+      throw unavailableCommandError(`${command} missing`);
+    });
+
+    await expect(getDeveloperAzureCredentialToken({ scope: "scope/.default" })).rejects.toBeInstanceOf(
+      TokenUnavailableError,
+    );
+    expect(mockExecuteCommand.mock.calls.map(([command]) => command)).toEqual(["az", "pwsh", "powershell"]);
+  });
+
+  test("starts no developer credential command for an already-aborted signal", async () => {
+    const reason = new Error("cancelled before developer authentication");
+
+    await expect(
+      getDeveloperAzureCredentialToken({
+        scope: "scope/.default",
+        abortSignal: AbortSignal.abort(reason),
+      }),
+    ).rejects.toBe(reason);
+    expect(mockExecuteCommand).not.toHaveBeenCalled();
+  });
+
+  test("does not try Azure PowerShell after active Azure CLI cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled developer authentication");
+    mockExecuteCommand.mockImplementation(
+      async (_command, _args, options) =>
+        new Promise((_resolve, reject) => {
+          expect(options?.abortSignal).toBe(controller.signal);
+          options?.abortSignal?.addEventListener("abort", () => reject(options.abortSignal?.reason), { once: true });
+        }),
+    );
+
+    const token = getDeveloperAzureCredentialToken({
+      scope: "scope/.default",
+      abortSignal: controller.signal,
+    });
+    await Promise.resolve();
+    controller.abort(reason);
+
+    await expect(token).rejects.toBe(reason);
+    expect(mockExecuteCommand).toHaveBeenCalledTimes(1);
+    expect(mockExecuteCommand).toHaveBeenCalledWith("az", expect.any(Array), {
+      abortSignal: controller.signal,
+    });
   });
 });

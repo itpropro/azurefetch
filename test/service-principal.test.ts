@@ -4,6 +4,50 @@ import { getServicePrincipalToken } from "../src/service-principal";
 import { createFetchMock, getBodyString, jsonResponse } from "./helpers";
 
 describe("getServicePrincipalToken", () => {
+  test("does not start an already-aborted token request", async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    const reason = new Error("cancelled before request");
+
+    await expect(
+      getServicePrincipalToken({
+        tenantId: "tenant",
+        clientId: "client",
+        clientSecret: "secret",
+        scope: "scope/.default",
+        abortSignal: AbortSignal.abort(reason),
+        fetch: fetcher,
+      }),
+    ).rejects.toBe(reason);
+
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  test("forwards cancellation to an active token request", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled during request");
+    const fetcher = vi.fn<typeof fetch>((_input, init) => {
+      expect(init?.signal).toBe(controller.signal);
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+          once: true,
+        });
+      });
+    });
+
+    const token = getServicePrincipalToken({
+      tenantId: "tenant",
+      clientId: "client",
+      clientSecret: "secret",
+      scope: "scope/.default",
+      abortSignal: controller.signal,
+      fetch: fetcher,
+    });
+    controller.abort(reason);
+
+    await expect(token).rejects.toBe(reason);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   test("rejects an HTTP authority before token acquisition", async () => {
     const fetcher = vi.fn<typeof fetch>();
 
