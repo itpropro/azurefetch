@@ -233,7 +233,24 @@ jobs:
       - name: Set up npm
         run: npm install --global npm@12.0.2 --ignore-scripts
 
-      - name: Publish
+      - name: Stage package
         env:
           PACKAGE_PATH: ${{ steps.verify.outputs.package_path }}
-        run: npm publish "$PACKAGE_PATH" --access public --provenance --ignore-scripts
+        run: npm stage publish "$PACKAGE_PATH" --access public --provenance --ignore-scripts
+
+      - name: Summarize staged package
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo "## npm package staged"
+            echo
+            echo "- Package: \`azurefetch@${RELEASE_TAG#v}\`"
+            echo "- Source tag: \`$RELEASE_TAG\`"
+            echo "- Workflow run: \`$GITHUB_RUN_ID\`"
+            echo "- Package SHA-256: \`$EXPECTED_PACKAGE_SHA256\`"
+            echo
+            echo "Review the staged metadata and downloaded tarball, then approve or reject with npm 2FA."
+          } >> "$GITHUB_STEP_SUMMARY"

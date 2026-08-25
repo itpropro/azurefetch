@@ -40,7 +40,7 @@
     "bench:storage:azurite": "AZUREFETCH_RUN_STORAGE_BENCHMARK=1 AZUREFETCH_STORAGE_CONNECTION_STRING=UseDevelopmentStorage=true bun run bench/storage.benchmark.ts",
     "test:watch": "vitest",
     "release": "bunx changelogen --release --push",
-    "publish:npm": "npm publish --access public",
+    "stage:npm": "bash -c 'set -euo pipefail; if [[ $# -ne 1 || $1 != *.tgz ]]; then echo \"Usage: bun run stage:npm -- <package.tgz>\" >&2; exit 2; fi; npm stage publish \"$1\" --access public --ignore-scripts' --",
     "check": "oxfmt --check && oxlint . && oxlint . --type-aware && vitest run && obuild && bun run test:edge-smoke"
   },
   "devDependencies": {
