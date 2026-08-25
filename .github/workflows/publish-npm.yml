@@ -105,16 +105,18 @@ jobs:
 
           test "$package_file" = "$expected_file"
           jq -e '
-            length == 1
-            and .[0].name == "azurefetch"
-            and ([.[0].files[].path | select(
+            to_entries
+            | select(length == 1)
+            | .[0].value
+            | .name == "azurefetch"
+            and ([.files[].path | select(
               . != "README.md"
               and . != "package.json"
               and (startswith("dist/") | not)
             )] | length == 0)
-            and ([.[0].files[].path] | index("README.md") != null)
-            and ([.[0].files[].path] | index("package.json") != null)
-            and ([.[0].files[].path | select(startswith("dist/"))] | length > 0)
+            and ([.files[].path] | index("README.md") != null)
+            and ([.files[].path] | index("package.json") != null)
+            and ([.files[].path | select(startswith("dist/"))] | length > 0)
           ' <<< "$pack_json" > /dev/null
 
           package_path="$PACKAGE_OUTPUT_DIR/$package_file"
