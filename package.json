@@ -3,6 +3,10 @@
   "version": "0.3.0",
   "description": "Minimal dependency-free Azure fetch utilities",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/itpropro/azurefetch"
+  },
   "files": [
     "dist"
   ],
