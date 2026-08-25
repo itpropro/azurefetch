@@ -226,6 +226,22 @@ const token = await getDefaultAzureCredentialToken({
 
 `globalThis.fetch` is required for managed identity and service principal flows. CLI and PowerShell are only attempted when command execution is available, including Node-compatible runtimes and Deno.
 
+### Developer credential flow
+
+`getDeveloperAzureCredentialToken` is a narrower alternative that only tries Azure CLI, then Azure PowerShell when CLI credentials are unavailable. It does not read service-principal environment variables or probe managed identity.
+
+```ts
+import { getDeveloperAzureCredentialToken } from "azurefetch";
+
+const controller = new AbortController();
+const token = await getDeveloperAzureCredentialToken({
+  scope: "https://management.azure.com/.default",
+  abortSignal: controller.signal,
+});
+```
+
+Malformed CLI output and cancellation are terminal. Azure PowerShell is not attempted in either case.
+
 ## Public entrypoint
 
 | Entry point  | Purpose                                                                                                                             |

@@ -2,6 +2,7 @@ import { TokenUnavailableError, TokenRequestError } from "./errors";
 import { getEnvironment, getEnv } from "./internal/env";
 import { resolveRequiredScopes } from "./internal/request-core";
 import { executeCommand, hasCommandExecution, isCommandUnavailable } from "./internal/process";
+import type { CommandExecutionOptions, CommandExecutionResult } from "./internal/process";
 import { parseNumericTimestamp } from "./internal/oauth";
 import { sanitizeAuthorityHost } from "./internal/url";
 import { getManagedIdentityToken } from "./managed-identity";
@@ -14,6 +15,20 @@ interface DefaultAzureCredentialOptions {
   managedIdentityClientId?: string;
   fetch?: typeof globalThis.fetch;
   probeTimeoutMs?: number;
+}
+
+export interface DeveloperAzureCredentialOptions {
+  scope: string | string[];
+  abortSignal?: AbortSignal;
+}
+
+interface ExternalCommandCredentialOptions {
+  commandRunner: (
+    command: string,
+    args: string[],
+    options?: CommandExecutionOptions,
+  ) => Promise<CommandExecutionResult>;
+  abortSignal?: AbortSignal;
 }
 
 interface ExternalCommandTokenPayload {
@@ -95,6 +110,31 @@ export async function getDefaultAzureCredentialToken(options: DefaultAzureCreden
   throw new TokenUnavailableError(`Could not find available credentials: ${failures.join(", ")}`);
 }
 
+export async function getDeveloperAzureCredentialToken(options: DeveloperAzureCredentialOptions): Promise<AccessToken> {
+  options.abortSignal?.throwIfAborted();
+  const scopes = resolveRequiredScopes(options.scope);
+  const commandOptions = {
+    commandRunner: executeCommand,
+    abortSignal: options.abortSignal,
+  };
+
+  const cliToken = await tryAcquireToken("azure cli", async () => getAzureCliToken(scopes, commandOptions));
+  if (cliToken != null) {
+    return cliToken;
+  }
+
+  const powershellToken = await tryAcquireToken("azure powershell", async () =>
+    getAzurePowerShellToken(scopes, commandOptions),
+  );
+  if (powershellToken != null) {
+    return powershellToken;
+  }
+
+  throw new TokenUnavailableError(
+    "Could not find available developer credentials: azure cli unavailable, azure powershell unavailable",
+  );
+}
+
 function tryGetResourceFromScope(scope: string): string {
   if (!scope.endsWith("/.default")) {
     return scope;
@@ -119,12 +159,8 @@ async function tryAcquireToken<T>(shouldTry: unknown, acquire: () => Promise<T>)
   }
 }
 
-async function getAzureCliToken(
-  scopes: string[],
-  options: {
-    commandRunner: (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>;
-  },
-): Promise<AccessToken> {
+async function getAzureCliToken(scopes: string[], options: ExternalCommandCredentialOptions): Promise<AccessToken> {
+  options.abortSignal?.throwIfAborted();
   if (!hasCommandExecution()) {
     throw new TokenUnavailableError("Command execution is unavailable");
   }
@@ -134,8 +170,10 @@ async function getAzureCliToken(
 
   let result: { stdout: string; stderr: string };
   try {
-    result = await options.commandRunner(command, args);
+    result = await runCredentialCommand(command, args, options);
   } catch (error: unknown) {
+    options.abortSignal?.throwIfAborted();
+
     if (isCommandUnavailable(error) || error instanceof TokenUnavailableError) {
       throw new TokenUnavailableError("Azure CLI is unavailable", error);
     }
@@ -148,10 +186,9 @@ async function getAzureCliToken(
 
 async function getAzurePowerShellToken(
   scopes: string[],
-  options: {
-    commandRunner: (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>;
-  },
+  options: ExternalCommandCredentialOptions,
 ): Promise<AccessToken> {
+  options.abortSignal?.throwIfAborted();
   const singleScope = scopes.length === 1 ? scopes[0] : undefined;
   if (singleScope == null) {
     throw new TokenUnavailableError("PowerShell credential requires exactly one scope");
@@ -180,16 +217,15 @@ async function getAzurePowerShellToken(
 
   for (const command of candidates) {
     try {
-      const result = await options.commandRunner(command, [
-        "-NoProfile",
-        "-NoLogo",
-        "-NonInteractive",
-        "-Command",
-        script,
-      ]);
+      const result = await runCredentialCommand(
+        command,
+        ["-NoProfile", "-NoLogo", "-NonInteractive", "-Command", script],
+        options,
+      );
 
       return normalizeCommandToken(parseJsonOutput(result.stdout));
     } catch (error: unknown) {
+      options.abortSignal?.throwIfAborted();
       lastError = error;
 
       if (!isCommandUnavailable(error)) {
@@ -199,6 +235,18 @@ async function getAzurePowerShellToken(
   }
 
   throw new TokenUnavailableError("Azure PowerShell is unavailable", lastError);
+}
+
+async function runCredentialCommand(
+  command: string,
+  args: string[],
+  options: ExternalCommandCredentialOptions,
+): Promise<CommandExecutionResult> {
+  if (options.abortSignal == null) {
+    return options.commandRunner(command, args);
+  }
+
+  return options.commandRunner(command, args, { abortSignal: options.abortSignal });
 }
 
 function parseJsonOutput(raw: string): unknown {
