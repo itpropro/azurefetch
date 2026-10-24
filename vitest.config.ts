@@ -6,5 +6,10 @@ export default defineConfig({
     environment: 'node',
     unstubEnvs: true,
     unstubGlobals: true,
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.ts'],
+      reporter: ['text-summary', 'html', 'json-summary'],
+    },
   },
 })
