@@ -1,17 +1,2 @@
-commit-msg:
-  commands:
-    commitlint:
-      run: bunx commitlint --edit {1}
-
-pre-commit:
-  commands:
-    format:
-      run: bun run format
-      stage_fixed: true
-    lint:
-      run: bun run lint
-
-pre-push:
-  commands:
-    lint-type:
-      run: bun run typecheck
+extends:
+  - node_modules/@visorian/code-standards/lefthook.yml
