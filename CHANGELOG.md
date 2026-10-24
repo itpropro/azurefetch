@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.4.0](https://github.com/itpropro/azurefetch/compare/v0.3.2...v0.4.0) (2026-10-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **core:** AppConfigurationPageSettings, KeyVaultPageSettings and ListPropertiesOptions were removed in the Key Vault and App Configuration commit; use PageSettings and KeyVaultRequestOptions. AzureRequestError no longer carries the parsed service error body as its cause.
+* **core:** TableListEntitiesOptions was removed in the previous Table commit; use ListOptions. Failed transactions report the status of the failed sub-response without a service error code.
+* **core:** KeyVaultRequestError and AppConfigurationRequestError are replaced by AzureRequestError. App Configuration drops the fields, acceptDateTime and tagsFilter options, the page etag and response, and the camelCase response fallbacks. Key Vault drops maxPageSize and the page response; SetSecretOptions/UpdateSecretPropertiesOptions become SecretAttributesOptions and the page types become SecretPage.
+* **core:** BlobServiceClientOptions, ParsedConnectionString, BlobBatchDeleteBlobOptions and BlobItem.metadata were removed in the previous Blob commit; use StorageClientOptions and BlobDeleteOptions.
+* **core:** TableClient is constructed with (tableUrl, credential, options), TableClient.list, TableServiceClient.request, the update mode parameters and nextPartitionKey/nextRowKey are removed, entity keys must use partitionKey/rowKey, entity properties are JSON primitives, transaction actions are one TableTransactionAction union, convenience results no longer include the Response, upsertEntity returns nothing, and the convenience request options are reduced to uploadText's contentType.
+* **core:** AccountSASPermissions, getAccountNameFromUrl, BlockBlobClient.downloadToBuffer/exists, ContainerClient.deleteBlob/ getBlobBatchClient, BlobServiceClient.request and BlobBatch are removed. Batch deletes use BlobBatchClient.deleteBlobs(urls, options) and return { status, errorCode } per sub-request. BlockBlobClient.upload no longer takes a content length, list pages no longer carry nextMarker, client constructors take (url, credential, options), StorageSharedKeyCredential no longer exposes accountKey, and ES2023 array methods are required.
+* **core:** shouldRefreshToken, getAuthorizationHeader, createTokenProvider and the TokenProvider/TokenReuseOptions types are no longer exported, AzureClient.sign is removed, getManagedIdentityToken no longer accepts probeTimeoutMs, and Deno 1 is no longer supported for developer credentials.
+
+### Bug Fixes
+
+* **core:** accept trailing-slash table URLs and surface other conflicts ([af97977](https://github.com/itpropro/azurefetch/commit/af979770e8c87c16853e2cec5275b9f70d327fe4)), closes [#38](https://github.com/itpropro/azurefetch/issues/38)
+* **core:** fix credential sources and simplify their plumbing ([da681a0](https://github.com/itpropro/azurefetch/commit/da681a0189e169c2772fa5f18a732c54551fd5df)), closes [#38](https://github.com/itpropro/azurefetch/issues/38)
+* **core:** keep batch deletes inside the client's account ([82e0f63](https://github.com/itpropro/azurefetch/commit/82e0f63cd0d7bb47ca316cb33ee6bfef1b9c7a0a)), closes [#38](https://github.com/itpropro/azurefetch/issues/38)
+* **core:** keep blob names and secret listings in their own scope ([2d1002d](https://github.com/itpropro/azurefetch/commit/2d1002de91a4b649c98b6023a8d0e46cc4f0a585)), closes [#38](https://github.com/itpropro/azurefetch/issues/38)
+* **core:** keep credential failures that occur after the response headers ([2ce8e5d](https://github.com/itpropro/azurefetch/commit/2ce8e5dab2b9b29b41665af623fbc4d6fdd34b4a)), closes [#38](https://github.com/itpropro/azurefetch/issues/38)
+* **core:** move Table onto shared storage plumbing ([d7740f7](https://github.com/itpropro/azurefetch/commit/d7740f7019341edb6551b1f1c3734907f61fecc7)), closes [#38](https://github.com/itpropro/azurefetch/issues/38)
+* **core:** sanitize malformed token responses and keep vault path prefixes ([f272f55](https://github.com/itpropro/azurefetch/commit/f272f55e0d447147b766838da191f54187c3cccb)), closes [#38](https://github.com/itpropro/azurefetch/issues/38)
+* **core:** share errors and paging across Key Vault and App Config ([5bba823](https://github.com/itpropro/azurefetch/commit/5bba8232e32115e3d542f9f8f881910d5b279b1c)), closes [#38](https://github.com/itpropro/azurefetch/issues/38)
+* **core:** share storage request plumbing and slim the Blob API ([f009be1](https://github.com/itpropro/azurefetch/commit/f009be14686b1c42d7bc78a1542ff01857835a94)), closes [#38](https://github.com/itpropro/azurefetch/issues/38)
+
 ## [0.3.2](https://github.com/itpropro/azurefetch/compare/v0.3.1...v0.3.2) (2026-08-25)
 
 
