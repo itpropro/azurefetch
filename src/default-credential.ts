@@ -1,5 +1,6 @@
 import { fetchJson, normalizeCommandToken, normalizeToken } from './internal/oauth'
 import { resolveRequiredScopes } from './internal/request-core'
+import type { RetryOptions } from './internal/request-core'
 import {
   defaultFetch,
   executeCommand,
@@ -32,6 +33,8 @@ export interface DefaultAzureCredentialOptions {
    */
   additionallyAllowedTenants?: string[]
   managedIdentityClientId?: string
+  /** Retries of token requests; managed identity on IMDS has its own defaults. */
+  retryOptions?: RetryOptions
   fetch?: typeof globalThis.fetch
 }
 
@@ -87,6 +90,7 @@ export async function acquireDefaultAzureCredentialToken(
       abortSignal: signal,
       claims: request.claims,
       enableCae: request.enableCae,
+      retryOptions: options.retryOptions,
       fetch: options.fetch,
     })
   }
@@ -126,6 +130,7 @@ export async function acquireDefaultAzureCredentialToken(
           scope,
           clientId: options.managedIdentityClientId,
           abortSignal: signal,
+          retryOptions: options.retryOptions,
           fetch: options.fetch,
         }),
       signal,
@@ -225,6 +230,7 @@ async function getWorkloadIdentityToken(
       signal,
     },
     options.fetch ?? defaultFetch,
+    options.retryOptions,
   )
 
   return normalizeToken(payload)

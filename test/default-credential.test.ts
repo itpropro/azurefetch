@@ -18,6 +18,7 @@ import { clearCredentialEnvironment, createFetchMock, getBodyString, jsonRespons
 const scope = 'scope/.default'
 const printToken = (token: string) =>
   `printf '%s' '{"accessToken":"${token}","expires_on":1700000000}'`
+const imdsTokenUnavailable = () => jsonResponse({ error: 'unavailable' }, 503)
 const imdsUnavailable = () => {
   throw new TypeError('fetch failed')
 }
@@ -187,6 +188,24 @@ describe('getDefaultAzureCredentialToken', () => {
       }),
     ).rejects.toBeInstanceOf(TypeError)
     await expect(calls()).resolves.toStrictEqual([])
+  })
+
+  test('moves on to Azure CLI after IMDS keeps answering 5xx through its retries', async () => {
+    const calls = await installCommands({ az: printToken('cli-token') })
+    const fetchMock = createFetchMock([
+      () => jsonResponse({ error: 'invalid_request' }, 400),
+      ...Array.from({ length: 6 }, () => imdsTokenUnavailable),
+    ])
+
+    const token = await getDefaultAzureCredentialToken({
+      scope,
+      retryOptions: { retryDelay: () => 0 },
+      fetch: fetchMock,
+    })
+
+    expect(token.token).toBe('cli-token')
+    expect(fetchMock).toHaveBeenCalledTimes(7)
+    await expect(calls()).resolves.toHaveLength(1)
   })
 
   test('falls back to Azure CLI when managed identity is unavailable', async () => {

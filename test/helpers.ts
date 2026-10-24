@@ -73,6 +73,17 @@ export function clearCredentialEnvironment(): void {
   }
 }
 
+/** Waits for a promise that must reject, for example while fake timers run, and returns the reason. */
+export async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise
+  } catch (error) {
+    return error
+  }
+
+  throw new Error('Expected the promise to reject')
+}
+
 export async function collect<T>(items: AsyncIterable<T>): Promise<T[]> {
   const collected: T[] = []
   for await (const item of items) {

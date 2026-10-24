@@ -1,15 +1,50 @@
-import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { getManagedIdentityToken } from '../src/managed-identity'
+import { TokenRequestError } from '../src/token-request-error'
 import { TokenUnavailableError } from '../src/token-unavailable-error'
-import { clearCredentialEnvironment, createFetchMock, getBodyString, jsonResponse } from './helpers'
+import {
+  clearCredentialEnvironment,
+  createFetchMock,
+  getBodyString,
+  jsonResponse,
+  rejectionOf,
+} from './helpers'
+import type { FetchHandler } from './helpers'
 
 const scope = 'https://vault.azure.net/.default'
 const tokenResponse = () => jsonResponse({ access_token: 'mi-token', expires_in: 600 })
+const probeResponse = () => jsonResponse({ error: 'invalid_request' }, 400)
+const unavailable = () => jsonResponse({ error: 'unavailable' }, 503)
+
+function gaps(times: number[]): number[] {
+  return times.slice(1).map((time, index) => time - (times[index] ?? 0))
+}
 
 function useAppService(): void {
   vi.stubEnv('IDENTITY_ENDPOINT', 'https://appservice.azurewebsites.net/identity')
   vi.stubEnv('IDENTITY_HEADER', 'app-header-token')
+}
+
+/** IMDS answers the probe, then `failures` token responses with `status`, then a token. */
+function imds(status: number, failures: number): { fetch: typeof fetch; times: number[] } {
+  const times: number[] = []
+  const fail: FetchHandler = () => {
+    times.push(Date.now())
+    return jsonResponse({ error: 'unavailable' }, status)
+  }
+  const succeed: FetchHandler = () => {
+    times.push(Date.now())
+    return tokenResponse()
+  }
+  return {
+    fetch: createFetchMock([
+      probeResponse,
+      ...Array.from({ length: failures }, () => fail),
+      succeed,
+    ]),
+    times,
+  }
 }
 
 describe('getManagedIdentityToken', () => {
@@ -174,8 +209,65 @@ describe('getManagedIdentityToken', () => {
     vi.stubEnv('MSI_ENDPOINT', 'http://localhost:8080/msi/token')
     const fetchMock = createFetchMock([() => jsonResponse({ error: 'invalid_resource' }, status)])
 
-    await expect(getManagedIdentityToken({ scope, fetch: fetchMock })).rejects.toMatchObject({
-      name,
+    await expect(
+      getManagedIdentityToken({ scope, retryOptions: { maxRetries: 0 }, fetch: fetchMock }),
+    ).rejects.toMatchObject({ name })
+  })
+})
+
+describe('managed identity retries', () => {
+  beforeEach(() => {
+    clearCredentialEnvironment()
+    vi.useFakeTimers({ now: 0 })
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  test('retries IMDS 410 five times from 3 s, waiting at least 70 s in total', async () => {
+    const { fetch, times } = imds(410, 5)
+
+    const token = getManagedIdentityToken({ scope, fetch })
+    await vi.runAllTimersAsync()
+
+    await expect(token).resolves.toMatchObject({ token: 'mi-token' })
+    expect(gaps(times)).toStrictEqual([2400, 4800, 9600, 19_200, 38_400])
+    expect(times.at(-1)).toBeGreaterThanOrEqual(70_000)
+  })
+
+  test('retries IMDS 404 five times from 800 ms and then reports the response', async () => {
+    const { fetch, times } = imds(404, 6)
+
+    const failure = rejectionOf(getManagedIdentityToken({ scope, fetch }))
+    await vi.runAllTimersAsync()
+
+    await expect(failure).resolves.toBeInstanceOf(TokenRequestError)
+    expect(gaps(times.slice(0, 6))).toStrictEqual([640, 1280, 2560, 5120, 10_240])
+    expect(fetch).toHaveBeenCalledTimes(7)
+  })
+
+  test('does not retry the IMDS probe', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => {
+      throw new TypeError('fetch failed')
     })
+
+    await expect(getManagedIdentityToken({ scope, fetch })).rejects.toBeInstanceOf(
+      TokenUnavailableError,
+    )
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  test('uses the default retries for App Service and reports a lasting 5xx as unavailable', async () => {
+    useAppService()
+    const fetch = createFetchMock([unavailable, unavailable, unavailable, unavailable])
+
+    const failure = rejectionOf(getManagedIdentityToken({ scope, fetch }))
+    await vi.runAllTimersAsync()
+
+    await expect(failure).resolves.toBeInstanceOf(TokenUnavailableError)
+    expect(fetch).toHaveBeenCalledTimes(4)
   })
 })

@@ -93,7 +93,10 @@ export async function* listEntitiesPage(
   }
 }
 
-/** Storage clients without a credential send through the AzureClient, which authorizes them. */
+/** Storage clients without a credential send through the AzureClient, which authorizes and retries. */
 function through(client: AzureClient): StorageClientOptions {
-  return { fetch: async (input, init) => await client.fetch(input, init) }
+  return {
+    fetch: async (input, init) => await client.fetch(input, init),
+    retryOptions: { maxRetries: 0 },
+  }
 }

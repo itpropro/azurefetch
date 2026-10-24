@@ -1,5 +1,6 @@
 import { fetchJson, normalizeToken } from './internal/oauth'
 import { resolveRequiredScopes } from './internal/request-core'
+import type { RetryOptions } from './internal/request-core'
 import { defaultFetch } from './internal/runtime'
 import { tokenRequestClaims } from './internal/token-options'
 import { sanitizeAuthorityHost } from './internal/url'
@@ -17,6 +18,7 @@ export interface ServicePrincipalOptions {
   claims?: string
   /** Requests a token for continuous access evaluation. */
   enableCae?: boolean
+  retryOptions?: RetryOptions
   fetch?: typeof globalThis.fetch
 }
 
@@ -53,6 +55,7 @@ export async function getServicePrincipalToken(
         signal: abortSignal,
       },
       options.fetch ?? defaultFetch,
+      options.retryOptions,
     )
   } catch (error) {
     abortSignal?.throwIfAborted()

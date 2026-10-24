@@ -1,4 +1,5 @@
 import { resolveRequiredScopes } from './internal/request-core'
+import type { RetryOptions } from './internal/request-core'
 import { cacheToken } from './internal/token'
 import type { CachedTokenRequest } from './internal/token'
 import { challengeClaims, resolveTenant, tokenCacheKey } from './internal/token-options'
@@ -10,6 +11,7 @@ export interface ClientSecretCredentialOptions {
   authorityHost?: string
   /** Tenants besides `tenantId` that `getToken` may request; `*` allows any tenant. */
   additionallyAllowedTenants?: string[]
+  retryOptions?: RetryOptions
   fetch?: typeof globalThis.fetch
 }
 

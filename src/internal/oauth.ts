@@ -1,16 +1,23 @@
 import { TokenRequestError } from '../token-request-error'
 import type { AccessToken } from '../types'
 import { jsonProperty } from './json'
+import { sendWithRetry } from './request-core'
+import type { RetryOptions } from './request-core'
 
 const digitsOnly = /^\d+$/u
 
-/** Sends an OAuth token request and maps error responses to `TokenRequestError`. */
+/** Sends an OAuth token request with retries and maps error responses to `TokenRequestError`. */
 export async function fetchJson(
   input: string | URL,
   init: RequestInit,
   fetcher: typeof globalThis.fetch,
+  retryOptions?: RetryOptions,
 ): Promise<unknown> {
-  const response = await fetcher(input, init)
+  const response = await sendWithRetry(async () => await fetcher(input, init), {
+    ...retryOptions,
+    signal: init.signal,
+    body: init.body,
+  })
   if (response.ok) {
     // Body failures such as cancellation or a reset connection must reach the caller.
     const body = await response.text()

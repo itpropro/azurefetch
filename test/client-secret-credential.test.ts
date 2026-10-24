@@ -242,7 +242,10 @@ describe('ClientSecretCredential', () => {
         () => jsonResponse({ error: 'invalid_grant' }, 400, 'Bad Request'),
         () => jsonResponse({ access_token: 'challenged', expires_in: 3600 }),
       ])
-      const credential = new ClientSecretCredential('home', 'client', 'secret', { fetch })
+      const credential = new ClientSecretCredential('home', 'client', 'secret', {
+        retryOptions: { maxRetries: 0 },
+        fetch,
+      })
       await credential.getToken(scope)
 
       vi.setSystemTime(3_300_000)
