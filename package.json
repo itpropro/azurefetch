@@ -32,8 +32,6 @@
     "test:keyvault": "AZUREFETCH_RUN_KEYVAULT_TESTS=1 vitest run test/keyvault.integration.test.ts",
     "test:storage": "AZUREFETCH_RUN_STORAGE_TESTS=1 vitest run test/storage.integration.test.ts",
     "test:storage:azurite": "AZUREFETCH_RUN_STORAGE_TESTS=1 AZUREFETCH_STORAGE_CONNECTION_STRING=UseDevelopmentStorage=true vitest run test/storage.integration.test.ts",
-    "bench:storage": "AZUREFETCH_RUN_STORAGE_BENCHMARK=1 bun run bench/storage.benchmark.ts",
-    "bench:storage:azurite": "AZUREFETCH_RUN_STORAGE_BENCHMARK=1 AZUREFETCH_STORAGE_CONNECTION_STRING=UseDevelopmentStorage=true bun run bench/storage.benchmark.ts",
     "test:watch": "vitest",
     "release": "bunx changelogen --release --push",
     "stage:npm": "bash -c 'set -euo pipefail; if [[ $# -ne 1 || $1 != *.tgz ]]; then echo \"Usage: bun run stage:npm -- <package.tgz>\" >&2; exit 2; fi; npm stage publish \"$1\" --access public --ignore-scripts' --",
@@ -42,9 +40,6 @@
     "fmt:check": "oxfmt --check"
   },
   "devDependencies": {
-    "@azure/data-tables": "13.3.2",
-    "@azure/identity": "4.13.1",
-    "@azure/storage-blob": "12.33.0",
     "@commitlint/cli": "^21.2.3",
     "@types/node": "^26.6.5",
     "@visorian/code-standards": "^0.7.0",
