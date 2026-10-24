@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
+import { BlockBlobClient } from '../src/block-blob-client'
 import { AzureClient } from '../src/client'
 import { ClientSecretCredential } from '../src/client-secret-credential'
 import type { RetryContext, RetryOptions } from '../src/internal/request-core'
 import { KeyVaultSecretClient } from '../src/keyvault-secrets'
+import { getServicePrincipalToken } from '../src/service-principal'
 import { TableClient } from '../src/table-client'
 import { TokenRequestError } from '../src/token-request-error'
 import { createFetchMock, getBodyString, jsonResponse, rejectionOf, textResponse } from './helpers'
@@ -361,6 +363,47 @@ describe('cancellation and bodies', () => {
 
     expect(response.status).toBe(503)
     expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  test('rejects at once when the caller aborts while a discarded body is released', async () => {
+    const controller = new AbortController()
+    const reason = new Error('cancelled while releasing the body')
+    const abortsOnRelease = () =>
+      new Response(
+        new ReadableStream({
+          cancel: () => {
+            controller.abort(reason)
+          },
+        }),
+        { status: 503 },
+      )
+    const fetch = createFetchMock([abortsOnRelease, ok])
+
+    await expect(
+      new AzureClient({ credential, fetch }).fetch(url, { signal: controller.signal }),
+    ).rejects.toBe(reason)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  test('does not send or retry a token or storage request that fetch cannot build', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>()
+
+    await expect(
+      getServicePrincipalToken({
+        tenantId: 'tenant',
+        clientId: 'client',
+        clientSecret: 'secret',
+        scope: 'https://resource/.default',
+        authorityHost: 'https://user:password@login.example.com',
+        fetch,
+      }),
+    ).rejects.toBeInstanceOf(TokenRequestError)
+    await expect(
+      new BlockBlobClient('https://user:password@account.blob.core.windows.net/c/b', credential, {
+        fetch,
+      }).upload('payload'),
+    ).rejects.toBeInstanceOf(TypeError)
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   test('token requests keep their error type when retries run out', async () => {

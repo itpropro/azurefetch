@@ -1,6 +1,11 @@
 import { AzureRequestError } from '../azure-request-error'
 import { StorageSharedKeyCredential } from '../storage-shared-key-credential'
-import { getAuthorizationHeader, sendWithRetry, storageOAuthScope } from './request-core'
+import {
+  getAuthorizationHeader,
+  sendWithRetry,
+  storageOAuthScope,
+  validatedUrl,
+} from './request-core'
 import type { AzureRequestCredential, RetryOptions } from './request-core'
 import { defaultFetch } from './runtime'
 import { encodeUtf8 } from './storage-encoding'
@@ -88,8 +93,9 @@ export class StorageTransport {
     setKnownContentLength(headers, init.body)
     await this.authorize(method, url, headers)
 
+    const requestUrl = validatedUrl(url, { method, headers })
     return await sendWithRetry(
-      async () => await this.fetcher(url, { method, headers, body: init.body }),
+      async () => await this.fetcher(requestUrl, { method, headers, body: init.body }),
       { ...this.retryOptions, body: init.body },
     )
   }

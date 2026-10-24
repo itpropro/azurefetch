@@ -1,7 +1,7 @@
 import { TokenRequestError } from '../token-request-error'
 import type { AccessToken } from '../types'
 import { jsonProperty } from './json'
-import { sendWithRetry } from './request-core'
+import { sendWithRetry, validatedUrl } from './request-core'
 import type { RetryOptions } from './request-core'
 
 const digitsOnly = /^\d+$/u
@@ -13,7 +13,8 @@ export async function fetchJson(
   fetcher: typeof globalThis.fetch,
   retryOptions?: RetryOptions,
 ): Promise<unknown> {
-  const response = await sendWithRetry(async () => await fetcher(input, init), {
+  const url = validatedUrl(input, init)
+  const response = await sendWithRetry(async () => await fetcher(url, init), {
     ...retryOptions,
     signal: init.signal,
     body: init.body,

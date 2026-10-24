@@ -79,6 +79,14 @@ export interface RetrySettings extends RetryOptions {
   body?: BodyInit | null
 }
 
+/**
+ * Builds the request once without its body, so fetch rejects a malformed URL, method or header
+ * here instead of on every retry.
+ */
+export function validatedUrl(input: string | URL, init: RequestInit): string {
+  return new Request(input, { method: init.method, headers: init.headers }).url
+}
+
 /** A stream body is consumed by the first attempt; other bodies can be sent again. */
 export function isReplayableBody(body: BodyInit | null | undefined): boolean {
   return !(body instanceof ReadableStream)
@@ -168,6 +176,8 @@ function parseNonNegative(value: string | null | undefined): number | undefined 
 }
 
 async function wait(delayInMs: number, signal: AbortSignal | null | undefined): Promise<void> {
+  // The signal can abort while a discarded body is cancelled, before the listener exists.
+  signal?.throwIfAborted()
   const cleanup = new AbortController()
   try {
     await new Promise<void>((resolve) => {
