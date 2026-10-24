@@ -97,6 +97,21 @@ describe('AzureClient', () => {
     expect(sentRequest(fetcher).headers.get('Authorization')).toBe('Bearer override')
   })
 
+  test('calls the global fetch with the receiver browsers and workers require', async () => {
+    vi.stubGlobal('fetch', async function strictFetch(this: unknown) {
+      if (this !== globalThis && this !== undefined) {
+        throw new TypeError('Illegal invocation')
+      }
+
+      return new Response(null, { status: 204 })
+    })
+    const client = new AzureClient({
+      credential: { getAuthorizationHeader: async () => 'Bearer token' },
+    })
+
+    await expect(client.fetch('https://example.com')).resolves.toMatchObject({ status: 204 })
+  })
+
   test('falls back to the default credential chain with the per-request authority host', async () => {
     vi.stubEnv('AZURE_TENANT_ID', 'tenant')
     vi.stubEnv('AZURE_CLIENT_ID', 'client')

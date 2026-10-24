@@ -116,6 +116,7 @@ describe('getManagedIdentityToken', () => {
       (url, init) => {
         expect(url).toBe('http://169.254.169.254/metadata/identity/oauth2/token')
         expect(new Headers(init.headers).has('Metadata')).toBe(false)
+        expect(init.signal).toBeInstanceOf(AbortSignal)
         return new Response('missing metadata header', { status: 400 })
       },
       (url, init) => {
@@ -123,6 +124,8 @@ describe('getManagedIdentityToken', () => {
         expect(requestUrl.searchParams.get('api-version')).toBe('2018-02-01')
         expect(requestUrl.searchParams.get('object_id')).toBe('object-1')
         expect(new Headers(init.headers).get('Metadata')).toBe('true')
+        // Only the probe is time-limited; issuing the first token can take longer.
+        expect(init.signal).toBeUndefined()
         return tokenResponse()
       },
     ])
@@ -144,6 +147,24 @@ describe('getManagedIdentityToken', () => {
       message: 'IMDS endpoint unavailable',
     })
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  test('reports a token response that fails mid-body as unavailable', async () => {
+    vi.stubEnv('MSI_ENDPOINT', 'http://localhost:8080/msi/token')
+    const fetchMock = createFetchMock([
+      () =>
+        new Response(
+          new ReadableStream({
+            start(stream) {
+              stream.error(new TypeError('terminated'))
+            },
+          }),
+        ),
+    ])
+
+    await expect(getManagedIdentityToken({ scope, fetch: fetchMock })).rejects.toMatchObject({
+      name: 'TokenUnavailableError',
+    })
   })
 
   test.each([

@@ -11,11 +11,12 @@ export async function fetchJson(
   fetcher: typeof globalThis.fetch,
 ): Promise<unknown> {
   const response = await fetcher(input, init)
-  const payload = await readJson(response)
   if (response.ok) {
-    return payload
+    // Body failures such as cancellation or a reset connection must reach the caller.
+    return await response.json()
   }
 
+  const payload = await readErrorBody(response)
   const error = jsonProperty(payload, 'error')
   const code = typeof error === 'string' ? error : jsonProperty(error, 'code')
   const description = jsonProperty(payload, 'error_description')
@@ -57,13 +58,9 @@ export function normalizeCommandToken(output: string): AccessToken {
   let payload: unknown
   try {
     payload = JSON.parse(output)
-  } catch (error) {
-    throw new TokenRequestError(
-      'Failed to parse command output as JSON',
-      undefined,
-      undefined,
-      error,
-    )
+  } catch {
+    // The parser error can quote the output, which may contain a token.
+    throw new TokenRequestError('Failed to parse command output as JSON')
   }
 
   const accessToken = jsonProperty(payload, 'accessToken')
@@ -81,7 +78,7 @@ export function normalizeCommandToken(output: string): AccessToken {
   return { token: accessToken, tokenType: 'Bearer', expiresOnTimestamp }
 }
 
-async function readJson(response: Response): Promise<unknown> {
+async function readErrorBody(response: Response): Promise<unknown> {
   try {
     return await response.json()
   } catch {

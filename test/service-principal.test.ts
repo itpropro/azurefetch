@@ -1,9 +1,58 @@
-import { describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { getServicePrincipalToken } from '../src/service-principal'
 import { createFetchMock, getBodyString, jsonResponse } from './helpers'
 
+const options = {
+  tenantId: 'tenant',
+  clientId: 'client',
+  clientSecret: 'secret',
+  scope: 's/.default',
+}
+
+/** A response whose body stream fails after the headers arrived. */
+function failingBody(onRead: () => void = () => {}): Response {
+  return new Response(
+    new ReadableStream({
+      start(stream) {
+        onRead()
+        stream.error(new TypeError('terminated'))
+      },
+    }),
+  )
+}
+
 describe('getServicePrincipalToken', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  test('keeps the abort reason when cancellation interrupts the response body', async () => {
+    const controller = new AbortController()
+    const reason = new Error('cancelled while reading')
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      failingBody(() => {
+        controller.abort(reason)
+      }),
+    )
+
+    await expect(
+      getServicePrincipalToken({ ...options, abortSignal: controller.signal, fetch: fetcher }),
+    ).rejects.toBe(reason)
+  })
+
+  test('reads the refresh hint from refresh_in', async () => {
+    vi.useFakeTimers({ now: 0, toFake: ['Date'] })
+    const fetcher = createFetchMock([
+      () => jsonResponse({ access_token: 'token', expires_in: 3600, refresh_in: 1800 }),
+    ])
+
+    await expect(getServicePrincipalToken({ ...options, fetch: fetcher })).resolves.toMatchObject({
+      expiresOnTimestamp: 3_600_000,
+      refreshAfterTimestamp: 1_800_000,
+    })
+  })
+
   test('does not start an already-aborted token request', async () => {
     const fetcher = vi.fn<typeof fetch>()
     const reason = new Error('cancelled before request')

@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { inspect } from 'node:util'
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -196,10 +197,13 @@ describe('getDeveloperAzureCredentialToken', () => {
   })
 
   test('does not try Azure PowerShell after malformed Azure CLI output', async () => {
-    const calls = await installCommands({ az: 'echo not json', pwsh: printToken('ps-token') })
+    const calls = await installCommands({
+      az: 'echo leaked-token',
+      pwsh: printToken('ps-token'),
+    })
 
-    await expect(getDeveloperAzureCredentialToken({ scope })).rejects.toBeInstanceOf(
-      TokenRequestError,
+    await expect(getDeveloperAzureCredentialToken({ scope })).rejects.toSatisfy(
+      (error) => error instanceof TokenRequestError && !inspect(error).includes('leaked-token'),
     )
     await expect(calls()).resolves.toHaveLength(1)
   })
