@@ -27,6 +27,8 @@ debug.log
 *.asc
 *.gpg
 *.secret
+# Test-only certificates, see test/fixtures/certificates/README.md
+!test/fixtures/certificates/*
 
 ## Test/build artifacts
 coverage/
