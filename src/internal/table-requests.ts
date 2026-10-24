@@ -26,7 +26,8 @@ export async function createTable(
     headers: { 'Content-Type': 'application/json', Prefer: 'return-no-content' },
     body: JSON.stringify({ TableName: tableName }),
   })
-  if (response.status === 409) {
+  // Other conflicts, such as TableBeingDeleted, are failures.
+  if (response.status === 409 && response.headers.get('x-ms-error-code') === 'TableAlreadyExists') {
     return { succeeded: false, errorCode: 'TableAlreadyExists' }
   }
 

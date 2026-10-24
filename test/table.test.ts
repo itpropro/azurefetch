@@ -115,20 +115,31 @@ describe('TableServiceClient', () => {
 })
 
 describe('TableClient', () => {
-  test('creates its table through the account endpoint', async () => {
+  test('creates its table through the account endpoint of a trailing-slash URL', async () => {
     const fetcher = createFetchMock([
       (url, init) => {
         expect(url).toBe('http://127.0.0.1:10002/devstoreaccount1/Tables')
         expect(getBodyString(init.body)).toBe('{"TableName":"mytable"}')
-        return textResponse('', 409)
+        return textResponse('', 409, 'Conflict', { 'x-ms-error-code': 'TableAlreadyExists' })
       },
     ])
 
-    const table = anonymousTable(fetcher, 'http://127.0.0.1:10002/devstoreaccount1/mytable')
+    const table = anonymousTable(fetcher, 'http://127.0.0.1:10002/devstoreaccount1/mytable/')
 
     await expect(table.createIfNotExists()).resolves.toStrictEqual({
       succeeded: false,
       errorCode: 'TableAlreadyExists',
+    })
+  })
+
+  test('reports a table that is still being deleted as a failed create', async () => {
+    const fetcher = createFetchMock([
+      () => textResponse('', 409, 'Conflict', { 'x-ms-error-code': 'TableBeingDeleted' }),
+    ])
+
+    await expect(anonymousTable(fetcher).createIfNotExists()).rejects.toMatchObject({
+      status: 409,
+      errorCode: 'TableBeingDeleted',
     })
   })
 
@@ -142,12 +153,12 @@ describe('TableClient', () => {
     const fetcher = createFetchMock([
       (url, init) => {
         expect(init.method).toBe('PUT')
-        expect(new URL(url).pathname).toBe("/mytable(PartitionKey='pk',RowKey='it''s%2F1')")
+        expect(new URL(url).pathname).toBe("/mytable(PartitionKey='pk',RowKey='it''s%20%2B1')")
         expect(new Headers(init.headers).has('If-Match')).toBe(false)
         expect(JSON.parse(getBodyString(init.body))).toStrictEqual({
           label: 'item',
           PartitionKey: 'pk',
-          RowKey: "it's/1",
+          RowKey: "it's +1",
         })
         return textResponse('', 204)
       },
@@ -155,7 +166,7 @@ describe('TableClient', () => {
 
     await anonymousTable(fetcher).upsertEntity({
       partitionKey: 'pk',
-      rowKey: "it's/1",
+      rowKey: "it's +1",
       label: 'item',
     })
 

@@ -9,7 +9,7 @@ import {
   tableProtocol,
 } from './internal/storage-request'
 import type { StorageClientOptions, StorageCredential } from './internal/storage-request'
-import { extendUrlPath, appendUrlPath } from './internal/storage-url'
+import { appendUrlPath, extendUrlPath, normalizeStorageUrl } from './internal/storage-url'
 import { parseEntity, parseEntityList, serializeEntity } from './internal/table-entity'
 import type { TableEntity } from './internal/table-entity'
 import { createTable, deleteTable, escapeODataKey } from './internal/table-requests'
@@ -41,8 +41,8 @@ export class TableClient {
 
   /** `url` addresses the table, for example `https://account.table.core.windows.net/mytable`. */
   public constructor(url: string, credential?: StorageCredential, options?: StorageClientOptions) {
-    this.url = url
-    const serviceUrl = new URL(url)
+    this.url = normalizeStorageUrl(url)
+    const serviceUrl = new URL(this.url)
     const segments = serviceUrl.pathname.split('/')
     this.tableName = decodeURIComponent(segments.pop() ?? '')
     serviceUrl.pathname = segments.join('/')
