@@ -27,6 +27,12 @@ export function getEnv(name: string): string | undefined {
   return value === '' ? undefined : value
 }
 
+/** Reads a non-empty environment variable unchanged, as passwords may start or end with whitespace. */
+export function getRawEnv(name: string): string | undefined {
+  const value = runtime.process?.env?.[name]
+  return value === '' ? undefined : value
+}
+
 export function hasCommandExecution(): boolean {
   return runtime.process?.versions?.node !== undefined
 }

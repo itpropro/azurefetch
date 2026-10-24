@@ -1,6 +1,8 @@
+import { X509Certificate, createHash } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { inspect } from 'node:util'
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -10,6 +12,8 @@ import {
   getDefaultAzureCredentialToken,
   getDeveloperAzureCredentialToken,
 } from '../src/default-credential'
+import { jsonProperty } from '../src/internal/json'
+import { getManagedIdentityToken } from '../src/managed-identity'
 import { TokenRequestError } from '../src/token-request-error'
 import { TokenUnavailableError } from '../src/token-unavailable-error'
 import { clearCredentialEnvironment, createFetchMock, getBodyString, jsonResponse } from './helpers'
@@ -29,6 +33,12 @@ const tokenForRequestedScope = (_url: string, init: RequestInit) =>
   })
 const azureCliCall = /^az /u
 const appServiceIdentityUrl = /^https:\/\/appservice\.azurewebsites\.net\/identity\?/u
+const credentialFields = new Set(['client_secret', 'client_assertion', 'password'])
+/** Length of an array property of decoded JSON, or `undefined` when it is absent. */
+const jsonLength = (value: unknown, key: string): number | undefined => {
+  const property = jsonProperty(value, key)
+  return Array.isArray(property) ? property.length : undefined
+}
 const tokenRequest = (url: string, init: RequestInit) => ({
   url,
   form: Object.fromEntries(new URLSearchParams(getBodyString(init.body))),
@@ -82,6 +92,38 @@ async function useWorkloadIdentityEnvironment(): Promise<string> {
   vi.stubEnv('AZURE_FEDERATED_TOKEN_FILE', tokenFile)
   useAppServiceEnvironment()
   return tokenFile
+}
+
+const certificatePath = (name: string) =>
+  fileURLToPath(new URL(`fixtures/certificates/${name}`, import.meta.url))
+const tokenUrl = 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token'
+
+function useEnvironment(variables: Record<string, string>): void {
+  for (const [name, value] of Object.entries({
+    AZURE_TENANT_ID: 'tenant',
+    AZURE_CLIENT_ID: 'client',
+    ...variables,
+  })) {
+    vi.stubEnv(name, value)
+  }
+}
+
+/** Records each token request's URL and form fields and answers with a token. */
+function environmentTokenEndpoint() {
+  const requests: ReturnType<typeof tokenRequest>[] = []
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input, init = {}) => {
+    requests.push(tokenRequest(input instanceof Request ? input.url : input.toString(), init))
+    return jsonResponse({ access_token: `token-${requests.length}`, expires_in: 3600 })
+  })
+  return { fetch, requests }
+}
+
+function decodeJwt(token: string | undefined): { header: unknown; claims: unknown } {
+  const [header = '', claims = ''] = (token ?? '').split('.')
+  return {
+    header: JSON.parse(Buffer.from(header, 'base64url').toString()),
+    claims: JSON.parse(Buffer.from(claims, 'base64url').toString()),
+  }
 }
 
 beforeEach(() => {
@@ -343,7 +385,11 @@ describe('DefaultAzureCredential getToken options', () => {
     const fetchMock = createFetchMock([
       (url) => {
         expect(url).toMatch(appServiceIdentityUrl)
-        expect([...new URL(url).searchParams.keys()]).toStrictEqual(['api-version', 'resource'])
+        expect([...new URL(url).searchParams.keys()]).toStrictEqual([
+          'api-version',
+          'resource',
+          'client_id',
+        ])
         return jsonResponse({ access_token: 'mi-token', expires_in: 3600 })
       },
     ])
@@ -416,6 +462,245 @@ describe('DefaultAzureCredential getToken options', () => {
       true,
     )
     await expect(calls()).resolves.toStrictEqual([])
+  })
+})
+
+describe('environment credential sources', () => {
+  test('signs a client assertion with the certificate in AZURE_CLIENT_CERTIFICATE_PATH', async () => {
+    useEnvironment({ AZURE_CLIENT_CERTIFICATE_PATH: certificatePath('pkcs1.pem') })
+    const { fetch, requests } = environmentTokenEndpoint()
+    const certificate = new X509Certificate(await readFile(certificatePath('pkcs1.pem')))
+
+    await expect(getDefaultAzureCredentialToken({ scope, fetch })).resolves.toMatchObject({
+      token: 'token-1',
+    })
+    const [request] = requests
+    expect(request?.url).toBe(tokenUrl)
+    expect(request?.form).toMatchObject({
+      client_id: 'client',
+      client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+      grant_type: 'client_credentials',
+      scope,
+    })
+    const { header, claims } = decodeJwt(request?.form['client_assertion'])
+    expect(header).toStrictEqual({
+      alg: 'PS256',
+      typ: 'JWT',
+      'x5t#S256': createHash('sha256').update(certificate.raw).digest('base64url'),
+    })
+    expect(claims).toMatchObject({ aud: tokenUrl, iss: 'client', sub: 'client' })
+  })
+
+  test.each([
+    ['TRUE', 2],
+    ['1', 2],
+    ['yes', undefined],
+  ])(
+    'sends the chain as x5c when AZURE_CLIENT_SEND_CERTIFICATE_CHAIN is %s',
+    async (flag, length) => {
+      useEnvironment({
+        AZURE_CLIENT_CERTIFICATE_PATH: certificatePath('chain.pem'),
+        AZURE_CLIENT_SEND_CERTIFICATE_CHAIN: flag,
+      })
+      const { fetch, requests } = environmentTokenEndpoint()
+
+      await getDefaultAzureCredentialToken({ scope, fetch })
+
+      const { header } = decodeJwt(requests[0]?.form['client_assertion'])
+      expect(jsonLength(header, 'x5c')).toBe(length)
+    },
+  )
+
+  test('decrypts the certificate key with AZURE_CLIENT_CERTIFICATE_PASSWORD, keeping its whitespace', async () => {
+    useEnvironment({
+      AZURE_CLIENT_CERTIFICATE_PATH: certificatePath('encrypted-pkcs8.pem'),
+      AZURE_CLIENT_CERTIFICATE_PASSWORD: ' fixture password ',
+    })
+    const { fetch } = environmentTokenEndpoint()
+
+    await expect(getDefaultAzureCredentialToken({ scope, fetch })).resolves.toMatchObject({
+      token: 'token-1',
+    })
+  })
+
+  test('rejects a PFX certificate and stops the chain', async () => {
+    useEnvironment({ AZURE_CLIENT_CERTIFICATE_PATH: certificatePath('client.pfx') })
+    useAppServiceEnvironment()
+    const calls = await installCommands({ az: printToken('cli-token') })
+    const { fetch } = environmentTokenEndpoint()
+
+    await expect(getDefaultAzureCredentialToken({ scope, fetch })).rejects.toThrow(
+      'does not contain a PEM-encoded certificate',
+    )
+    expect(fetch).not.toHaveBeenCalled()
+    await expect(calls()).resolves.toStrictEqual([])
+  })
+
+  test('requests a token with the username and password, keeping the password whitespace', async () => {
+    useEnvironment({ AZURE_USERNAME: 'user@contoso.com', AZURE_PASSWORD: ' p@ss word ' })
+    const { fetch, requests } = environmentTokenEndpoint()
+
+    await getDefaultAzureCredentialToken({ scope, fetch })
+
+    expect(requests[0]?.url).toBe(tokenUrl)
+    expect(requests[0]?.form).toStrictEqual({
+      client_id: 'client',
+      grant_type: 'password',
+      username: 'user@contoso.com',
+      password: ' p@ss word ',
+      scope,
+    })
+  })
+
+  test('passes an Entra MFA error through unchanged and stops the chain', async () => {
+    useEnvironment({ AZURE_USERNAME: 'user@contoso.com', AZURE_PASSWORD: 'password' })
+    const calls = await installCommands({ az: printToken('cli-token') })
+    const description = 'AADSTS50076: you must use multi-factor authentication'
+    const fetchMock = createFetchMock([
+      () => jsonResponse({ error: 'invalid_grant', error_description: description }, 400),
+    ])
+
+    await expect(getDefaultAzureCredentialToken({ scope, fetch: fetchMock })).rejects.toMatchObject(
+      {
+        name: 'TokenRequestError',
+        status: 400,
+        errorCode: 'invalid_grant',
+        message: `400 OK: ${description}`,
+      },
+    )
+    await expect(calls()).resolves.toStrictEqual([])
+  })
+
+  test('prefers a client secret, then a certificate, then a username and password', async () => {
+    const { fetch, requests } = environmentTokenEndpoint()
+    useEnvironment({
+      AZURE_CLIENT_SECRET: 'secret',
+      AZURE_CLIENT_CERTIFICATE_PATH: certificatePath('pkcs8.pem'),
+      AZURE_USERNAME: 'user@contoso.com',
+      AZURE_PASSWORD: 'password',
+    })
+    await getDefaultAzureCredentialToken({ scope, fetch })
+    vi.stubEnv('AZURE_CLIENT_SECRET', undefined)
+    await getDefaultAzureCredentialToken({ scope, fetch })
+    vi.stubEnv('AZURE_CLIENT_CERTIFICATE_PATH', undefined)
+    await getDefaultAzureCredentialToken({ scope, fetch })
+
+    expect(
+      requests.map(({ form }) => Object.keys(form).find((key) => credentialFields.has(key))),
+    ).toStrictEqual(['client_secret', 'client_assertion', 'password'])
+  })
+
+  test('moves on when the environment is incomplete', async () => {
+    useEnvironment({ AZURE_USERNAME: 'user@contoso.com' })
+    useAppServiceEnvironment()
+    const fetchMock = createFetchMock([
+      () => jsonResponse({ access_token: 'mi-token', expires_in: 3600 }),
+    ])
+
+    await expect(
+      getDefaultAzureCredentialToken({ scope, fetch: fetchMock }),
+    ).resolves.toMatchObject({ token: 'mi-token' })
+  })
+
+  test('uses AZURE_CLIENT_ID for managed identity in the chain unless managedIdentityClientId is set', async () => {
+    vi.stubEnv('AZURE_CLIENT_ID', 'environment-client')
+    useAppServiceEnvironment()
+    const clientIds: (string | null)[] = []
+    const fetchMock = vi.fn<typeof globalThis.fetch>(async (input) => {
+      clientIds.push(
+        new URL(input instanceof Request ? input.url : input.toString()).searchParams.get(
+          'client_id',
+        ),
+      )
+      return jsonResponse({ access_token: 'mi-token', expires_in: 3600 })
+    })
+
+    await getDefaultAzureCredentialToken({ scope, fetch: fetchMock })
+    await getDefaultAzureCredentialToken({
+      scope,
+      managedIdentityClientId: 'explicit-client',
+      fetch: fetchMock,
+    })
+    await getManagedIdentityToken({ scope, fetch: fetchMock })
+
+    expect(clientIds).toStrictEqual(['environment-client', 'explicit-client', null])
+  })
+
+  test.each([
+    ['certificate', { AZURE_CLIENT_CERTIFICATE_PATH: certificatePath('pkcs8.pem') }],
+    ['username and password', { AZURE_USERNAME: 'user@contoso.com', AZURE_PASSWORD: 'password' }],
+  ])('honors the per-call tenant, claims and CAE for the %s source', async (_source, variables) => {
+    useEnvironment({ ...variables, AZURE_ADDITIONALLY_ALLOWED_TENANTS: 'guest' })
+    const { fetch, requests } = environmentTokenEndpoint()
+    const credential = new DefaultAzureCredential({ fetch })
+    const claims = '{"access_token":{"nbf":{"essential":true,"value":"1700000000"}}}'
+
+    await credential.getToken(scope, { tenantId: 'guest', enableCae: true })
+    await credential.getToken(scope, { tenantId: 'guest', enableCae: true, claims })
+    await credential.getToken(scope)
+    await credential.getToken(scope, { tenantId: 'guest', enableCae: true })
+
+    expect(requests.map(({ url }) => url)).toStrictEqual([
+      'https://login.microsoftonline.com/guest/oauth2/v2.0/token',
+      'https://login.microsoftonline.com/guest/oauth2/v2.0/token',
+      tokenUrl,
+    ])
+    expect(JSON.parse(requests[0]?.form['claims'] ?? '')).toStrictEqual({
+      access_token: { xms_cc: { values: ['cp1'] } },
+    })
+    expect(JSON.parse(requests[1]?.form['claims'] ?? '')).toStrictEqual({
+      access_token: { nbf: { essential: true, value: '1700000000' }, xms_cc: { values: ['cp1'] } },
+    })
+    await expect(credential.getToken(scope, { tenantId: 'other' })).rejects.toBeInstanceOf(
+      TokenUnavailableError,
+    )
+  })
+
+  test.each([
+    ['certificate', { AZURE_CLIENT_CERTIFICATE_PATH: certificatePath('pkcs8.pem') }],
+    ['username and password', { AZURE_USERNAME: 'user@contoso.com', AZURE_PASSWORD: 'password' }],
+  ])('retries the %s token request and stops it on cancellation', async (_source, variables) => {
+    useEnvironment(variables)
+    const urls: string[] = []
+    const retried = createFetchMock([
+      (url) => {
+        urls.push(url)
+        return jsonResponse({ error: 'temporarily_unavailable' }, 503)
+      },
+      (url) => {
+        urls.push(url)
+        return jsonResponse({ access_token: 'retried', expires_in: 3600 })
+      },
+    ])
+    await expect(
+      getDefaultAzureCredentialToken({
+        scope,
+        retryOptions: { retryDelay: () => 0 },
+        fetch: retried,
+      }),
+    ).resolves.toMatchObject({ token: 'retried' })
+
+    const reason = new Error('cancelled environment credential')
+    const controller = new AbortController()
+    const hanging = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+      const signal = init?.signal
+      await new Promise((resolve) => {
+        signal?.addEventListener('abort', resolve)
+      })
+      signal?.throwIfAborted()
+      return jsonResponse({})
+    })
+    const token = new DefaultAzureCredential({ fetch: hanging }).getToken(scope, {
+      abortSignal: controller.signal,
+    })
+    await vi.waitFor(() => {
+      expect(hanging).toHaveBeenCalledTimes(1)
+    })
+    controller.abort(reason)
+
+    await expect(token).rejects.toBe(reason)
+    expect(urls).toStrictEqual([tokenUrl, tokenUrl])
+    expect(hanging.mock.calls[0]?.[0]).toBe(tokenUrl)
   })
 })
 
