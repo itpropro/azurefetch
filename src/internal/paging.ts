@@ -1,3 +1,8 @@
+export interface ListOptions {
+  continuationToken?: string
+  maxPageSize?: number
+}
+
 export interface Page<T> {
   page: T
   continuationToken?: string

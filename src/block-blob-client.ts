@@ -14,6 +14,11 @@ export interface BlobDeleteIfExistsResponse {
   errorCode?: string
 }
 
+export interface BlobUploadOptions {
+  /** Defaults to `application/octet-stream`. */
+  contentType?: string
+}
+
 export interface BlobDeleteOptions {
   deleteSnapshots?: 'include' | 'only'
 }
@@ -29,9 +34,15 @@ export class BlockBlobClient {
     this.transport = new StorageTransport(credential, options)
   }
 
-  public async upload(body: string | BufferSource | Blob): Promise<Response> {
+  public async upload(
+    body: string | BufferSource | Blob,
+    options: BlobUploadOptions = {},
+  ): Promise<Response> {
     const response = await this.transport.send('PUT', this.url, {
-      headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': 'application/octet-stream' },
+      headers: {
+        'x-ms-blob-type': 'BlockBlob',
+        'Content-Type': options.contentType ?? 'application/octet-stream',
+      },
       body,
     })
     if (!response.ok) {

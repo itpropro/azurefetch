@@ -20,30 +20,47 @@ export interface StorageRequestInit {
   body?: BodyInit
 }
 
-type SharedKeySigner = (
-  method: string,
-  url: URL,
-  headers: Headers,
-  credential: StorageSharedKeyCredential,
-) => Promise<string>
+interface SignableRequest {
+  method: string
+  url: URL
+  headers: Headers
+}
+
+/** Signing scheme and default headers of a storage service. */
+export interface StorageProtocol {
+  sign: (request: SignableRequest, credential: StorageSharedKeyCredential) => Promise<string>
+  headers: HeadersInit
+}
 
 const trailingSlash = /\/$/u
+const odataVersion = '3.0;NetFx'
 const leadingQuestionMark = /^\?/u
+
+export const blobProtocol: StorageProtocol = { sign: signBlobRequest, headers: {} }
+
+export const tableProtocol: StorageProtocol = {
+  sign: signTableRequest,
+  headers: {
+    Accept: 'application/json;odata=nometadata',
+    DataServiceVersion: odataVersion,
+    MaxDataServiceVersion: odataVersion,
+  },
+}
 
 /** Sends authorized Storage REST requests for one client. */
 export class StorageTransport {
   private readonly credential: StorageCredential | undefined
   private readonly fetcher: typeof globalThis.fetch
-  private readonly signSharedKey: SharedKeySigner
+  private readonly protocol: StorageProtocol
 
   public constructor(
     credential: StorageCredential | undefined,
     options: StorageClientOptions = {},
-    signSharedKey: SharedKeySigner = applyBlobSharedKeyAuth,
+    protocol: StorageProtocol = blobProtocol,
   ) {
     this.credential = credential
     this.fetcher = options.fetch ?? defaultFetch
-    this.signSharedKey = signSharedKey
+    this.protocol = protocol
   }
 
   public async send(
@@ -52,9 +69,18 @@ export class StorageTransport {
     init: StorageRequestInit = {},
   ): Promise<Response> {
     const url = new URL(target)
-    addQueryParameters(url, init.query)
-    const headers = new Headers(init.headers)
-    applyStorageDateAndVersionHeaders(headers)
+    for (const [name, value] of Object.entries(init.query ?? {})) {
+      if (value !== undefined) {
+        url.searchParams.set(name, value)
+      }
+    }
+
+    const headers = new Headers(this.protocol.headers)
+    for (const [name, value] of new Headers(init.headers)) {
+      headers.set(name, value)
+    }
+    headers.set('x-ms-date', new Date().toUTCString())
+    headers.set('x-ms-version', storageServiceVersion)
     setKnownContentLength(headers, init.body)
     await this.authorize(method, url, headers)
 
@@ -64,7 +90,10 @@ export class StorageTransport {
   /** Sets the Authorization header when the client has a credential; SAS URLs carry their own. */
   public async authorize(method: string, url: URL, headers: Headers): Promise<void> {
     if (this.credential instanceof StorageSharedKeyCredential) {
-      headers.set('Authorization', await this.signSharedKey(method, url, headers, this.credential))
+      headers.set(
+        'Authorization',
+        await this.protocol.sign({ method, url, headers }, this.credential),
+      )
     } else if (this.credential !== undefined) {
       headers.set('Authorization', await getAuthorizationHeader(this.credential, storageOAuthScope))
     }
@@ -132,29 +161,8 @@ export function parseStorageConnectionString(
   )
 }
 
-export function addQueryParameters(url: URL, query: Partial<Record<string, string>> = {}): void {
-  for (const [name, value] of Object.entries(query)) {
-    if (value !== undefined) {
-      url.searchParams.set(name, value)
-    }
-  }
-}
-
-export function applyStorageDateAndVersionHeaders(
-  headers: Headers,
-  version = storageServiceVersion,
-): void {
-  if (!headers.has('x-ms-date')) {
-    headers.set('x-ms-date', new Date().toUTCString())
-  }
-
-  if (!headers.has('x-ms-version')) {
-    headers.set('x-ms-version', version)
-  }
-}
-
 /** Shared key signatures cover Content-Length, so it is set explicitly for bodies of known size. */
-export function setKnownContentLength(headers: Headers, body: BodyInit | null | undefined): void {
+function setKnownContentLength(headers: Headers, body: BodyInit | null | undefined): void {
   let length: number | undefined
   if (typeof body === 'string') {
     length = encodeUtf8(body).byteLength
@@ -170,10 +178,8 @@ export function setKnownContentLength(headers: Headers, body: BodyInit | null | 
 }
 
 /** Shared Key scheme of the Blob service. */
-export async function applyBlobSharedKeyAuth(
-  method: string,
-  url: URL,
-  headers: Headers,
+async function signBlobRequest(
+  { method, url, headers }: SignableRequest,
   credential: StorageSharedKeyCredential,
 ): Promise<string> {
   const contentLength = headers.get('Content-Length')
@@ -201,10 +207,8 @@ export async function applyBlobSharedKeyAuth(
 }
 
 /** Shared Key Lite scheme of the Table service. */
-export async function applyTableSharedKeyLiteAuth(
-  _method: string,
-  url: URL,
-  headers: Headers,
+async function signTableRequest(
+  { url, headers }: SignableRequest,
   credential: StorageSharedKeyCredential,
 ): Promise<string> {
   const comp = url.searchParams.get('comp')
@@ -239,4 +243,23 @@ export function storageRequestError(operation: string, response: Response): Azur
     response.status,
     response.headers.get('x-ms-error-code') ?? undefined,
   )
+}
+
+/** Account name of a service URL; Shared Key clients need a URL that names the account. */
+export function storageAccountName(url: string, credential: StorageCredential | undefined): string {
+  const accountName = getAccountNameFromUrl(url)
+  if (credential instanceof StorageSharedKeyCredential && accountName === '') {
+    throw new Error(
+      'Unable to extract accountName from provided URL for StorageSharedKeyCredential',
+    )
+  }
+
+  return accountName
+}
+
+export function multipartBoundary(prefix: string): string {
+  const random = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  )
+  return `${prefix}_${random.join('')}`
 }

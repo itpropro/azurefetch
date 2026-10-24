@@ -34,3 +34,10 @@ export function appendUrlPath(baseUrl: string, path: string): string {
   url.pathname = `${url.pathname.replace(trailingSlash, '')}/${path}`
   return url.toString()
 }
+
+/** Appends text to the last path segment, as OData entity and query paths need, and keeps the query. */
+export function extendUrlPath(baseUrl: string, suffix: string): string {
+  const url = new URL(baseUrl)
+  url.pathname += suffix
+  return url.toString()
+}

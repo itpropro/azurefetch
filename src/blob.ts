@@ -7,6 +7,7 @@ export type {
   BlobDeleteIfExistsResponse,
   BlobDeleteOptions,
   BlobGetPropertiesResponse,
+  BlobUploadOptions,
 } from './block-blob-client'
 export { ContainerClient } from './container-client'
 export type {
@@ -14,6 +15,6 @@ export type {
   ContainerCreateIfNotExistsResponse,
   ListBlobsFlatSegment,
 } from './container-client'
-export type { ListOptions } from './internal/blob-listing'
+export type { ListOptions } from './internal/paging'
 export type { StorageClientOptions, StorageCredential } from './internal/storage-request'
 export { StorageSharedKeyCredential } from './storage-shared-key-credential'

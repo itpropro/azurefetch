@@ -1,5 +1,9 @@
 import type { BlobDeleteOptions } from './block-blob-client'
-import { StorageTransport, storageRequestError } from './internal/storage-request'
+import {
+  StorageTransport,
+  multipartBoundary,
+  storageRequestError,
+} from './internal/storage-request'
 import type { StorageClientOptions, StorageCredential } from './internal/storage-request'
 
 export interface BlobBatchSubResponse {
@@ -32,9 +36,7 @@ export class BlobBatchClient {
     blobUrls: string[],
     options: BlobDeleteOptions = {},
   ): Promise<BlobBatchSubmitResponse> {
-    const boundary = `batch_${Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
-      byte.toString(16).padStart(2, '0'),
-    ).join('')}`
+    const boundary = multipartBoundary('batch')
     const parts = await Promise.all(
       blobUrls.map(async (blobUrl, index) => {
         const url = new URL(blobUrl)

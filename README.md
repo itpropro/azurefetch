@@ -122,9 +122,10 @@ const textResult = await downloadText(
 )
 console.log(textResult.text)
 
-const config = await downloadJson<{ mode: string }>(
+const config = await downloadJson(
   client,
   'https://myaccount.blob.core.windows.net/container/config.json',
+  (value) => value as { mode: string },
 )
 console.log(config.value.mode)
 

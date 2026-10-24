@@ -1,14 +1,15 @@
 import { BlobBatchClient } from './blob-batch-client'
 import { ContainerClient } from './container-client'
 import { listNames } from './internal/blob-listing'
-import type { ListOptions } from './internal/blob-listing'
+import type { ListOptions } from './internal/paging'
 import {
   StorageTransport,
   parseStorageConnectionString,
+  storageAccountName,
   storageServiceVersion,
 } from './internal/storage-request'
 import type { StorageClientOptions, StorageCredential } from './internal/storage-request'
-import { appendUrlPath, getAccountNameFromUrl, normalizeStorageUrl } from './internal/storage-url'
+import { appendUrlPath, normalizeStorageUrl } from './internal/storage-url'
 import { StorageSharedKeyCredential } from './storage-shared-key-credential'
 
 export interface ContainerItem {
@@ -41,12 +42,7 @@ export class BlobServiceClient {
 
   public constructor(url: string, credential?: StorageCredential, options?: StorageClientOptions) {
     this.url = normalizeStorageUrl(url)
-    this.accountName = getAccountNameFromUrl(url)
-    if (credential instanceof StorageSharedKeyCredential && this.accountName === '') {
-      throw new Error(
-        'Unable to extract accountName from provided URL for StorageSharedKeyCredential',
-      )
-    }
+    this.accountName = storageAccountName(url, credential)
 
     this.credential = credential
     this.options = options

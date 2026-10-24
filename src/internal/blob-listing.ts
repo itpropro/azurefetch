@@ -1,11 +1,7 @@
 import { paginate } from './paging'
+import type { ListOptions } from './paging'
 import { storageRequestError } from './storage-request'
 import type { StorageTransport } from './storage-request'
-
-export interface ListOptions {
-  continuationToken?: string
-  maxPageSize?: number
-}
 
 export interface NamePage {
   names: string[]

@@ -1,14 +1,8 @@
 import { TokenRequestError } from '../token-request-error'
 import type { AccessToken } from '../types'
+import { jsonProperty } from './json'
 
 const digitsOnly = /^\d+$/u
-
-/** Reads a property of parsed JSON without trusting its shape. */
-export function jsonProperty(value: unknown, key: string): unknown {
-  return typeof value === 'object' && value !== null && key in value
-    ? Object.getOwnPropertyDescriptor(value, key)?.value
-    : undefined
-}
 
 /** Sends an OAuth token request and maps error responses to `TokenRequestError`. */
 export async function fetchJson(

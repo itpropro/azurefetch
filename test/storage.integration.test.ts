@@ -2,7 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 
 import { BlobServiceClient } from '../src/blob-service-client'
 import { DefaultAzureCredential } from '../src/default-azure-credential'
-import { TableServiceClient } from '../src/table'
+import type { TableClient } from '../src/table-client'
+import { TableServiceClient } from '../src/table-service-client'
+import { collect } from './helpers'
 
 const env = process.env
 const developmentStorage =
@@ -275,11 +277,11 @@ describe.runIf(env['AZUREFETCH_RUN_STORAGE_TESTS'] === '1' && configured)(
           })
         })
 
-        test('list().byPage paginates with continuation tokens', async () => {
+        test('listEntities paginates with continuation tokens', async () => {
           const rowKeys: string[] = []
           const continuationTokens: (string | undefined)[] = []
 
-          for await (const page of tableClient.list().byPage({ maxPageSize: 1 })) {
+          for await (const page of tableClient.listEntities().byPage({ maxPageSize: 1 })) {
             rowKeys.push(...page.value.map((entity) => entity.rowKey))
             continuationTokens.push(page.continuationToken)
           }
@@ -312,6 +314,33 @@ describe.runIf(env['AZUREFETCH_RUN_STORAGE_TESTS'] === '1' && configured)(
           expect(response).toStrictEqual({ succeeded: false, errorCode: 'ResourceNotFound' })
         })
       })
+
+      test.runIf(authMode === 'connection-string')(
+        'a table SAS URL reaches entities, queries and table deletion',
+        async () => {
+          const tableName = createTableName('sas')
+          const accountSas = new URL(
+            await blobService.generateAccountSasUrl(new Date(Date.now() + 60 * 60 * 1000), {
+              permissions: 'rwdlacu',
+              services: 't',
+              resourceTypes: 'sco',
+              protocol: 'https,http',
+            }),
+          ).search
+          const sasService = new TableServiceClient(`${tableService.url}${accountSas}`)
+          const sasTable = sasService.getTableClient(tableName)
+
+          await sasTable.createIfNotExists()
+          await sasTable.upsertEntity({ partitionKey: 'p', rowKey: 'r', value: 'inserted' })
+          await sasTable.upsertEntity({ partitionKey: 'p', rowKey: 'r', value: 'replaced' })
+          await expect(sasTable.getEntity('p', 'r')).resolves.toMatchObject({ value: 'replaced' })
+          const pages = await collect(sasTable.listEntities().byPage())
+          expect(pages.flatMap((page) => page.value)).toHaveLength(1)
+          await expect(sasService.deleteTableIfExists(tableName)).resolves.toStrictEqual({
+            succeeded: true,
+          })
+        },
+      )
 
       describe('table batch', () => {
         const tableName = createTableName('batch')
@@ -424,7 +453,7 @@ function createTableName(suffix: string): string {
 }
 
 async function deleteTableRowsInTransaction(
-  tableClient: ReturnType<TableServiceClient['getTableClient']>,
+  tableClient: TableClient,
   rows: { partitionKey: string; rowKey: string }[],
 ): Promise<void> {
   if (rows.length === 0) {

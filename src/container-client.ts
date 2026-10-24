@@ -1,7 +1,7 @@
 import { BlockBlobClient } from './block-blob-client'
 import type { BlobDeleteIfExistsResponse } from './block-blob-client'
 import { listNames } from './internal/blob-listing'
-import type { ListOptions } from './internal/blob-listing'
+import type { ListOptions } from './internal/paging'
 import { StorageTransport, storageRequestError } from './internal/storage-request'
 import type { StorageClientOptions, StorageCredential } from './internal/storage-request'
 import { appendUrlPath } from './internal/storage-url'

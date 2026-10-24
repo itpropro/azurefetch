@@ -57,6 +57,4 @@ export type {
   BlobUploadTextOptions,
   TableEntityPage,
   TableGetEntityResponse,
-  TableListEntitiesOptions,
-  TableUpsertEntityResponse,
 } from './convenience'
