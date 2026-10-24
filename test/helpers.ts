@@ -69,3 +69,12 @@ export function clearCredentialEnvironment(): void {
     vi.stubEnv(name, undefined)
   }
 }
+
+export async function collect<T>(items: AsyncIterable<T>): Promise<T[]> {
+  const collected: T[] = []
+  for await (const item of items) {
+    collected.push(item)
+  }
+
+  return collected
+}

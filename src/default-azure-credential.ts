@@ -24,11 +24,7 @@ export class DefaultAzureCredential {
     let getToken = this.tokens.get(key)
     if (getToken === undefined) {
       getToken = cacheToken(
-        async () =>
-          await getDefaultAzureCredentialToken({
-            ...this.options,
-            scope: scope.length === 1 ? (scope[0] ?? scope) : scope,
-          }),
+        async () => await getDefaultAzureCredentialToken({ ...this.options, scope }),
       )
       this.tokens.set(key, getToken)
     }
