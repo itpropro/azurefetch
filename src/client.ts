@@ -1,12 +1,14 @@
 import { DefaultAzureCredential } from './default-azure-credential'
 import { getAuthorizationHeader, storageOAuthScope } from './internal/request-core'
-import type { AzureRequestCredential } from './internal/request-core'
+import type { AzureRequestCredential, RequestSigningCredential } from './internal/request-core'
 import { defaultFetch } from './internal/runtime'
 import { requireHttpsUrl } from './internal/url'
 
+export type AzureClientCredential = AzureRequestCredential | RequestSigningCredential
+
 export interface AzureRequestOverrides {
   scope?: string | string[]
-  credential?: AzureRequestCredential
+  credential?: AzureClientCredential
   authorityHost?: string
 }
 
@@ -40,7 +42,12 @@ export class AzureClient {
       this.getDefaultCredential(azure.authorityHost ?? this.options.authorityHost)
     const scope = azure.scope ?? this.options.scope ?? storageOAuthScope
 
-    request.headers.set('Authorization', await getAuthorizationHeader(credential, scope))
+    if ('signRequest' in credential) {
+      await credential.signRequest(request)
+    } else {
+      request.headers.set('Authorization', await getAuthorizationHeader(credential, scope))
+    }
+
     return await this.fetcher(request)
   }
 

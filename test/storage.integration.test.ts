@@ -4,7 +4,7 @@ import { BlobServiceClient } from '../src/blob-service-client'
 import { DefaultAzureCredential } from '../src/default-azure-credential'
 import type { TableClient } from '../src/table-client'
 import { TableServiceClient } from '../src/table-service-client'
-import { collect } from './helpers'
+import { collect, randomToken } from './helpers'
 
 const env = process.env
 const developmentStorage =
@@ -443,10 +443,6 @@ describe.runIf(env['AZUREFETCH_RUN_STORAGE_TESTS'] === '1' && configured)(
     })
   },
 )
-
-function randomToken(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-}
 
 function createTableName(suffix: string): string {
   return `azfetchtable${randomToken().replaceAll('-', '')}${suffix}`.slice(0, 63)

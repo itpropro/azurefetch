@@ -15,3 +15,9 @@ export function requireHttpsUrl(input: string, name: string): URL {
 
   return url
 }
+
+/** HTTPS service endpoint without trailing slashes, query or fragment. */
+export function normalizeServiceUrl(input: string, name: string): string {
+  const url = requireHttpsUrl(input, name)
+  return `${url.origin}${url.pathname.replace(trailingSlashes, '')}`
+}

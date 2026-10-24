@@ -1,6 +1,14 @@
-export interface ListOptions {
+export interface PageSettings {
   continuationToken?: string
+}
+
+export interface ListOptions extends PageSettings {
   maxPageSize?: number
+}
+
+/** Iterates items directly or page by page with `byPage`. */
+export interface PagedAsyncIterableIterator<T, TPage> extends AsyncIterable<T> {
+  byPage: (settings?: PageSettings) => AsyncIterable<TPage>
 }
 
 export interface Page<T> {
@@ -31,4 +39,18 @@ export function paginate<T>(
   }
 
   return iterator
+}
+
+/** Adds item iteration on top of a page iterator. */
+export function pagedItems<T, TPage extends { value: T[] }>(
+  byPage: (settings?: PageSettings) => AsyncIterable<TPage>,
+): PagedAsyncIterableIterator<T, TPage> {
+  return {
+    byPage,
+    async *[Symbol.asyncIterator]() {
+      for await (const page of byPage()) {
+        yield* page.value
+      }
+    },
+  }
 }

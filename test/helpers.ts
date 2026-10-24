@@ -78,3 +78,8 @@ export async function collect<T>(items: AsyncIterable<T>): Promise<T[]> {
 
   return collected
 }
+
+/** Unique suffix for resources that integration tests create in shared accounts. */
+export function randomToken(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}

@@ -15,6 +15,11 @@ interface TokenCredential {
 
 export type AzureRequestCredential = HeaderCredential | TokenCredential
 
+/** Signs the complete request, as App Configuration access keys require. */
+export interface RequestSigningCredential {
+  signRequest: (request: Request) => Promise<void>
+}
+
 export function resolveRequiredScopes(scope: string | string[]): string[] {
   const scopes = (Array.isArray(scope) ? scope : [scope])
     .map((value) => value.trim())
