@@ -20,7 +20,7 @@ Fetch-first Azure utilities for modern runtimes.
 
 ## Current status
 
-The current release is `azurefetch@0.3.2`. It ships one ESM entrypoint targeting ES2022, includes TypeScript declarations, and has no runtime dependencies.
+azurefetch ships one ESM entrypoint targeting ES2022, includes TypeScript declarations, and has no runtime dependencies.
 
 | Area              | Implemented operations                                                                                                                         |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
