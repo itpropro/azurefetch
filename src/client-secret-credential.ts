@@ -20,7 +20,10 @@ export class ClientSecretCredential {
   // ES private, so the secret stays out of logs and serialization.
   readonly #options: Omit<ServicePrincipalOptions, 'scope'>
   readonly #additionallyAllowedTenants: string[]
-  readonly #tokens = new Map<string, (request: CachedTokenRequest) => Promise<AccessToken>>()
+  readonly #tokens = new Map<
+    string,
+    (request: CachedTokenRequest<string>) => Promise<AccessToken>
+  >()
 
   public constructor(
     tenantId: string,
@@ -44,7 +47,7 @@ export class ClientSecretCredential {
     const key = tokenCacheKey(scope, tenantId, enableCae)
     let getToken = this.#tokens.get(key)
     if (getToken === undefined) {
-      getToken = cacheToken(
+      getToken = cacheToken<string>(
         async (abortSignal, claims) =>
           await getServicePrincipalToken({
             ...this.#options,
@@ -60,7 +63,7 @@ export class ClientSecretCredential {
 
     return await getToken({
       abortSignal: options.abortSignal,
-      claims: challengeClaims(options.claims),
+      challenge: challengeClaims(options.claims),
     })
   }
 }

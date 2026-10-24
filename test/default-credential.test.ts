@@ -464,6 +464,19 @@ describe('DefaultAzureCredential getToken options', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  test('names the tenant of the claims call in the re-login commands, even when it shares a cached token', async () => {
+    await installCommands({ az: printToken('cli-token') })
+    const credential = new DefaultAzureCredential({
+      tenantId: 'home',
+      fetch: createFetchMock([imdsUnavailable, imdsUnavailable]),
+    })
+    await credential.getToken(scope)
+
+    await expect(credential.getToken(scope, { tenantId: 'home', claims })).rejects.toThrow(
+      `--scope ${scope} --tenant home or Connect-AzAccount -ClaimsChallenge ${encodedClaims} -Tenant home`,
+    )
+  })
+
   test('requests an allowed per-call tenant from Azure CLI', async () => {
     const calls = await installCommands({ az: printToken('cli-token') })
     const credential = new DefaultAzureCredential({

@@ -4,13 +4,16 @@ const refreshSkewMs = 300_000
 const failedRefreshCooldownMs = 30_000
 const aborted = Symbol('aborted')
 
-export interface CachedTokenRequest {
+export interface CachedTokenRequest<Challenge> {
   abortSignal?: AbortSignalLike
   /** A claims challenge always sends its own request and never falls back to the cached token. */
-  claims?: string
+  challenge?: Challenge
 }
 
-export type LoadToken = (signal: AbortSignal, claims?: string) => Promise<AccessToken>
+export type LoadToken<Challenge> = (
+  signal: AbortSignal,
+  challenge?: Challenge,
+) => Promise<AccessToken>
 
 export function formatAuthorizationHeader(token: AccessToken): string {
   return `${token.tokenType ?? 'Bearer'} ${token.token}`
@@ -73,25 +76,25 @@ class Acquisition {
  * A failed refresh keeps an unexpired token and waits 30 s before trying again. Cancellation only
  * rejects the aborting caller.
  */
-export function cacheToken(
-  loadToken: LoadToken,
-): (request?: CachedTokenRequest) => Promise<AccessToken> {
+export function cacheToken<Challenge>(
+  loadToken: LoadToken<Challenge>,
+): (request?: CachedTokenRequest<Challenge>) => Promise<AccessToken> {
   let cached: AccessToken | undefined
   let cachedOrder = 0
   let started = 0
   let retryAfterTimestamp = 0
   let pending: Acquisition | undefined
 
-  const acquire = (claims: string | undefined): Acquisition => {
+  const acquire = (challenge: Challenge | undefined): Acquisition => {
     started += 1
     const order = started
     return new Acquisition(async (signal) => {
       let token: AccessToken
       try {
-        token = await loadToken(signal, claims)
+        token = await loadToken(signal, challenge)
       } catch (error) {
         if (
-          claims !== undefined ||
+          challenge !== undefined ||
           signal.aborted ||
           cached === undefined ||
           Date.now() >= cached.expiresOnTimestamp
@@ -113,13 +116,13 @@ export function cacheToken(
     })
   }
 
-  return async ({ abortSignal, claims } = {}) => {
+  return async ({ abortSignal, challenge } = {}) => {
     if (abortSignal?.aborted === true) {
       throw abortReason(abortSignal)
     }
 
-    if (claims !== undefined) {
-      return await acquire(claims).join(abortSignal)
+    if (challenge !== undefined) {
+      return await acquire(challenge).join(abortSignal)
     }
 
     if (cached !== undefined && isUsable(cached, retryAfterTimestamp)) {
