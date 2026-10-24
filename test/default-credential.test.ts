@@ -421,6 +421,49 @@ describe('DefaultAzureCredential getToken options', () => {
     await expect(calls()).resolves.toHaveLength(1)
   })
 
+  test('shares one token between no tenant and the configured tenant, so claims replace it', async () => {
+    useServicePrincipalEnvironment()
+    const { fetch, requests } = environmentTokenEndpoint()
+    const credential = new DefaultAzureCredential({ fetch })
+
+    await credential.getToken(scope)
+    await credential.getToken(scope, { tenantId: 'tenant', claims })
+
+    await expect(credential.getToken(scope)).resolves.toMatchObject({ token: 'token-2' })
+    await expect(credential.getToken(scope, { tenantId: 'tenant' })).resolves.toMatchObject({
+      token: 'token-2',
+    })
+    expect(requests).toHaveLength(2)
+  })
+
+  test('cancels the workload identity request without trying managed identity', async () => {
+    await useWorkloadIdentityEnvironment()
+    const reason = new Error('cancelled workload identity')
+    const controller = new AbortController()
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const signal = init?.signal
+      await new Promise((resolve) => {
+        signal?.addEventListener('abort', resolve)
+      })
+      signal?.throwIfAborted()
+      return jsonResponse({})
+    })
+
+    const token = new DefaultAzureCredential({ fetch: fetchMock }).getToken(scope, {
+      abortSignal: controller.signal,
+    })
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+    controller.abort(reason)
+
+    await expect(token).rejects.toBe(reason)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'https://login.microsoftonline.com/pod-tenant/oauth2/v2.0/token',
+    )
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   test('requests an allowed per-call tenant from Azure CLI', async () => {
     const calls = await installCommands({ az: printToken('cli-token') })
     const credential = new DefaultAzureCredential({

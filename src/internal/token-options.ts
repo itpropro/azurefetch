@@ -23,27 +23,36 @@ export function resolveTenant(
   requested: string | undefined,
   allowed: readonly string[] = [],
 ): string | undefined {
-  if (
-    requested === undefined ||
-    configured === 'adfs' ||
-    getEnv('AZURE_IDENTITY_DISABLE_MULTITENANTAUTH') !== undefined
-  ) {
-    return configured === undefined ? undefined : requireTenantId(configured)
+  const tenant = selectTenant(configured, requested)
+  if (tenant === undefined) {
+    return undefined
   }
 
-  requireTenantId(requested)
+  requireTenantId(tenant)
   if (
     configured !== undefined &&
-    requested !== configured &&
+    tenant !== configured &&
     !allowed.includes('*') &&
-    !allowed.includes(requested)
+    !allowed.includes(tenant)
   ) {
     throw new TokenUnavailableError(
-      `The credential is not configured to acquire tokens for tenant ${requested}. Add it to additionallyAllowedTenants, or add "*" to allow any tenant.`,
+      `The credential is not configured to acquire tokens for tenant ${tenant}. Add it to additionallyAllowedTenants, or add "*" to allow any tenant.`,
     )
   }
 
-  return requested
+  return tenant
+}
+
+/** The tenant a request uses before the allowlist check; it also keys token caches. */
+export function selectTenant(
+  configured: string | undefined,
+  requested: string | undefined,
+): string | undefined {
+  return requested === undefined ||
+    configured === 'adfs' ||
+    getEnv('AZURE_IDENTITY_DISABLE_MULTITENANTAUTH') !== undefined
+    ? configured
+    : requested
 }
 
 /** Tenants the environment credential may serve besides AZURE_TENANT_ID, separated by semicolons. */

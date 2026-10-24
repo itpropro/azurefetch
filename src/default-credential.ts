@@ -68,6 +68,29 @@ export async function getDefaultAzureCredentialToken(
   return await acquireDefaultAzureCredentialToken(options, {})
 }
 
+/**
+ * The tenant the chain uses when a call names none: the environment credential's, then workload
+ * identity's, then the developer tools'. Calls whose tenant selects the same one share a token.
+ */
+export function defaultChainTenant(options: DefaultAzureCredentialOptions): string | undefined {
+  const tenantId = getEnv('AZURE_TENANT_ID')
+  const clientId = getEnv('AZURE_CLIENT_ID')
+  const hasEnvironmentCredential =
+    getEnv('AZURE_CLIENT_SECRET') !== undefined ||
+    getEnv('AZURE_CLIENT_CERTIFICATE_PATH') !== undefined ||
+    (getEnv('AZURE_USERNAME') !== undefined && getRawEnv('AZURE_PASSWORD') !== undefined)
+  if (tenantId !== undefined && clientId !== undefined && hasEnvironmentCredential) {
+    return tenantId
+  }
+
+  const workloadTenantId = options.tenantId ?? tenantId
+  const hasWorkloadIdentity =
+    workloadTenantId !== undefined &&
+    (options.managedIdentityClientId ?? clientId) !== undefined &&
+    getEnv('AZURE_FEDERATED_TOKEN_FILE') !== undefined
+  return hasWorkloadIdentity ? workloadTenantId : options.tenantId
+}
+
 export async function acquireDefaultAzureCredentialToken(
   options: DefaultAzureCredentialTokenOptions,
   request: ChainRequest,

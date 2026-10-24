@@ -1,9 +1,14 @@
-import { acquireDefaultAzureCredentialToken } from './default-credential'
+import { acquireDefaultAzureCredentialToken, defaultChainTenant } from './default-credential'
 import type { DefaultAzureCredentialOptions } from './default-credential'
 import { resolveRequiredScopes, storageOAuthScope } from './internal/request-core'
 import { cacheToken, formatAuthorizationHeader } from './internal/token'
 import type { CachedTokenRequest } from './internal/token'
-import { challengeClaims, requireTenantId, tokenCacheKey } from './internal/token-options'
+import {
+  challengeClaims,
+  requireTenantId,
+  selectTenant,
+  tokenCacheKey,
+} from './internal/token-options'
 import { requireHttpsUrl } from './internal/url'
 import type { AccessToken, GetTokenOptions } from './types'
 
@@ -27,7 +32,11 @@ export class DefaultAzureCredential {
     const scope = resolveRequiredScopes(scopes)
     const tenantId = options.tenantId === undefined ? undefined : requireTenantId(options.tenantId)
     const { enableCae } = options
-    const key = tokenCacheKey(scope, tenantId, enableCae)
+    const key = tokenCacheKey(
+      scope,
+      selectTenant(defaultChainTenant(this.options), tenantId),
+      enableCae,
+    )
     let getToken = this.tokens.get(key)
     if (getToken === undefined) {
       getToken = cacheToken(
