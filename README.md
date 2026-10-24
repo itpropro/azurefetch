@@ -1,6 +1,7 @@
 # azurefetch
 
 [![npm version](https://img.shields.io/npm/v/azurefetch?style=flat&colorA=18181B&colorB=B45309)](https://www.npmjs.com/package/azurefetch)
+[![npm downloads](https://img.shields.io/npm/dm/azurefetch?style=flat&colorA=18181B&colorB=B45309)](https://www.npmjs.com/package/azurefetch)
 [![bundle size](https://img.shields.io/bundlephobia/minzip/azurefetch?style=flat&colorA=18181B&colorB=B45309)](https://bundlephobia.com/package/azurefetch)
 
 Fetch-first Azure utilities for modern runtimes.
