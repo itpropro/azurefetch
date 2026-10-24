@@ -1,66 +1,30 @@
-const textEncoder = new TextEncoder();
+const textEncoder = new TextEncoder()
 
-interface RuntimeBuffer {
-  from(value: string, encoding: "base64"): Uint8Array;
-  from(value: ArrayBufferView | ArrayBuffer): { toString(encoding: "base64"): string };
+export function encodeUtf8(value: string): Uint8Array<ArrayBuffer> {
+  return textEncoder.encode(value)
 }
 
-function getRuntimeBuffer(): RuntimeBuffer | undefined {
-  return (globalThis as typeof globalThis & { Buffer?: RuntimeBuffer }).Buffer;
-}
-
-function toUint8Array(bytes: ArrayBuffer | ArrayBufferView): Uint8Array {
-  if (bytes instanceof Uint8Array) {
-    return bytes;
-  }
-
-  if (ArrayBuffer.isView(bytes)) {
-    return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  }
-
-  return new Uint8Array(bytes);
-}
-
-export function encodeUtf8(value: string): Uint8Array {
-  return textEncoder.encode(value);
-}
-
-export function decodeBase64ToBytes(base64: string): Uint8Array {
-  if (typeof globalThis.atob === "function") {
-    const binary = globalThis.atob(base64);
-    const bytes = new Uint8Array(binary.length);
-
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-
-    return bytes;
-  }
-
-  const runtimeBuffer = getRuntimeBuffer();
-  if (runtimeBuffer != null) {
-    return Uint8Array.from(runtimeBuffer.from(base64, "base64"));
-  }
-
-  throw new Error("A runtime base64 decoder is required to decode shared key values");
+export function decodeBase64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
+  return Uint8Array.from(atob(base64), (character) => character.codePointAt(0) ?? 0)
 }
 
 export function encodeBytesToBase64(bytes: ArrayBuffer | ArrayBufferView): string {
-  const normalizedBytes = toUint8Array(bytes);
+  const view =
+    bytes instanceof ArrayBuffer
+      ? new Uint8Array(bytes)
+      : new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  return btoa(Array.from(view, (byte) => String.fromCodePoint(byte)).join(''))
+}
 
-  if (typeof globalThis.btoa === "function") {
-    let binary = "";
-    for (const byte of normalizedBytes) {
-      binary += String.fromCharCode(byte);
-    }
+/** Signs text with HMAC-SHA256 and a base64 key, as Azure Storage and App Configuration expect. */
+export function createHmacSigner(base64Key: string): (text: string) => Promise<string> {
+  const keyBytes = decodeBase64ToBytes(base64Key)
+  let key: Promise<CryptoKey> | undefined
 
-    return globalThis.btoa(binary);
+  return async (text) => {
+    key ??= crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, [
+      'sign',
+    ])
+    return encodeBytesToBase64(await crypto.subtle.sign('HMAC', await key, encodeUtf8(text)))
   }
-
-  const runtimeBuffer = getRuntimeBuffer();
-  if (runtimeBuffer != null) {
-    return runtimeBuffer.from(normalizedBytes).toString("base64");
-  }
-
-  throw new Error("A runtime base64 encoder is required to encode shared key signatures");
 }

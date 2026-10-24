@@ -1,55 +1,61 @@
-import { describe, expect, expectTypeOf, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from 'vitest'
 
-import { getAuthorizationHeader, shouldRefreshToken } from "../src/token";
-import type { AccessToken } from "../src/types";
+import { cacheToken } from '../src/internal/token'
+import type { AccessToken } from '../src/types'
 
-describe("shouldRefreshToken", () => {
-  test("uses refreshAfterTimestamp when present", () => {
-    const now = Date.now();
-    const token = {
-      token: "t",
-      tokenType: "Bearer" as const,
-      expiresOnTimestamp: now + 60 * 60 * 1000,
-      refreshAfterTimestamp: now - 100,
-    };
+function tokenLoader(lifetimeMs: number, refreshInMs?: number) {
+  let count = 0
+  return vi.fn<() => Promise<AccessToken>>(async () => {
+    count += 1
+    return {
+      token: `token-${count}`,
+      expiresOnTimestamp: Date.now() + lifetimeMs,
+      refreshAfterTimestamp: refreshInMs === undefined ? undefined : Date.now() + refreshInMs,
+    }
+  })
+}
 
-    expect(shouldRefreshToken(token, { now })).toBe(true);
-  });
+describe('cacheToken', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
 
-  test("uses expiry minus skew when refreshAfterTimestamp is absent", () => {
-    const now = Date.now();
-    const token = {
-      token: "t",
-      tokenType: "Bearer" as const,
-      expiresOnTimestamp: now + 60_000,
-    };
+  test('reuses a token until five minutes before it expires', async () => {
+    vi.useFakeTimers({ now: 0 })
+    const getToken = cacheToken(tokenLoader(600_000))
 
-    expect(shouldRefreshToken(token, { now, refreshSkewMs: 30_000 })).toBe(false);
-    expect(shouldRefreshToken(token, { now: now + 31_000, refreshSkewMs: 30_000 })).toBe(true);
-  });
-});
+    expect((await getToken()).token).toBe('token-1')
+    vi.setSystemTime(299_999)
+    expect((await getToken()).token).toBe('token-1')
+    vi.setSystemTime(300_000)
+    expect((await getToken()).token).toBe('token-2')
+  })
 
-describe("AccessToken authorization", () => {
-  test("accepts the standard token shape without tokenType", () => {
-    const token: AccessToken = {
-      token: "standard-token",
-      expiresOnTimestamp: Date.now() + 60_000,
-    };
+  test('refreshes at refreshAfterTimestamp even when the token is far from expiry', async () => {
+    vi.useFakeTimers({ now: 0 })
+    const getToken = cacheToken(tokenLoader(3_600_000, 60_000))
 
-    expectTypeOf(token.tokenType).toEqualTypeOf<"Bearer" | "pop" | undefined>();
-    expect(getAuthorizationHeader(token)).toBe("Bearer standard-token");
-  });
+    expect((await getToken()).token).toBe('token-1')
+    vi.setSystemTime(60_000)
+    expect((await getToken()).token).toBe('token-2')
+  })
 
-  test.each([
-    { tokenType: "Bearer" as const, expected: "Bearer explicit-token" },
-    { tokenType: "pop" as const, expected: "pop explicit-token" },
-  ])("serializes $tokenType tokens", ({ tokenType, expected }) => {
-    expect(
-      getAuthorizationHeader({
-        token: "explicit-token",
-        tokenType,
-        expiresOnTimestamp: Date.now() + 60_000,
-      }),
-    ).toBe(expected);
-  });
-});
+  test('shares one request between concurrent callers', async () => {
+    const loadToken = tokenLoader(600_000)
+    const getToken = cacheToken(loadToken)
+
+    const tokens = await Promise.all([getToken(), getToken()])
+
+    expect(tokens.map(({ token }) => token)).toStrictEqual(['token-1', 'token-1'])
+    expect(loadToken).toHaveBeenCalledTimes(1)
+  })
+
+  test('requests a new token after a failed request', async () => {
+    const loadToken = tokenLoader(600_000)
+    loadToken.mockRejectedValueOnce(new Error('first failure'))
+    const getToken = cacheToken(loadToken)
+
+    await expect(getToken()).rejects.toThrow('first failure')
+    await expect(getToken()).resolves.toMatchObject({ token: 'token-1' })
+  })
+})

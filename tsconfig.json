@@ -1,27 +1,14 @@
 {
+  "extends": "@visorian/code-standards/tsconfig/strict.json",
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node"],
-    "strict": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
-    "allowSyntheticDefaultImports": true,
-    "noEmit": false,
-    "declaration": true,
-    "declarationMap": false,
-    "sourceMap": false,
-    "outDir": "dist",
-    "rootDir": ".",
-    "allowImportingTsExtensions": false,
-    "verbatimModuleSyntax": true,
+    "noEmit": true,
     "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedIndexedAccess": true
+    "noUnusedParameters": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "build.config.ts", "vitest.config.ts"]
+  "include": ["src", "test", "*.config.ts"]
 }

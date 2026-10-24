@@ -1,235 +1,115 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from 'vitest'
 
+import { AzureClient } from '../src/client'
 import {
-  AzureClient,
   downloadJson,
   downloadText,
   getEntity,
   listEntitiesPage,
-  uploadText,
   upsertEntity,
-} from "../src/index";
-import { createFetchMock, jsonResponse, textResponse } from "./helpers";
+  uploadText,
+} from '../src/convenience'
+import { collect, createFetchMock, getBodyString, jsonResponse, textResponse } from './helpers'
 
-describe("uploadText", () => {
-  test("sends PUT request with default text content type", async () => {
-    const requests: Array<{ method?: string; headers: Headers; body: string }> = [];
+const blobUrl = 'https://example.blob.core.windows.net/container/file.txt'
+const tableUrl = 'https://example.table.core.windows.net/mytable'
+
+function bearerClient(fetcher: typeof fetch): AzureClient {
+  return new AzureClient({
+    fetch: fetcher,
+    credential: { getAuthorizationHeader: async () => 'Bearer test' },
+  })
+}
+
+describe('blob helpers', () => {
+  test('uploadText sends an authorized block blob PUT', async () => {
     const fetcher = createFetchMock([
       (url, init) => {
-        requests.push({
-          method: init.method,
-          headers: new Headers(init.headers as HeadersInit),
-          body: init.body as string,
-        });
-        return textResponse("", 201);
+        const headers = new Headers(init.headers)
+        expect(url).toBe(blobUrl)
+        expect(init.method).toBe('PUT')
+        expect(getBodyString(init.body)).toBe('hello')
+        expect(Object.fromEntries(headers)).toMatchObject({
+          authorization: 'Bearer test',
+          'content-type': 'text/plain; charset=utf-8',
+          'x-ms-blob-type': 'BlockBlob',
+          'x-ms-version': '2024-11-04',
+        })
+        return textResponse('', 201)
       },
-    ]);
+    ])
 
-    const client = new AzureClient({
-      fetch: fetcher,
-      credential: { getAuthorizationHeader: async () => "Bearer test" },
-    });
-    const response = await uploadText(client, "https://example.blob.core.windows.net/container/file.txt", "hello");
+    const response = await uploadText(bearerClient(fetcher), blobUrl, 'hello')
 
-    expect(response.status).toBe(201);
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.method).toBe("PUT");
-    expect(requests[0]?.headers.get("Content-Type")).toBe("text/plain; charset=utf-8");
-    expect(requests[0]?.body).toBe("hello");
-  });
+    expect(response.status).toBe(201)
+  })
 
-  test("throws on upload failure", async () => {
-    const fetcher = createFetchMock([() => textResponse("failed", 500, "Server Error")]);
-    const client = new AzureClient({
-      fetch: fetcher,
-      credential: { getAuthorizationHeader: async () => "Bearer test" },
-    });
+  test('uploadText reports failures with their status', async () => {
+    const fetcher = createFetchMock([() => textResponse('failed', 500, 'Server Error')])
 
+    await expect(uploadText(bearerClient(fetcher), blobUrl, 'hello')).rejects.toMatchObject({
+      name: 'AzureRequestError',
+      status: 500,
+    })
+  })
+
+  test('downloadText and downloadJson read the blob body', async () => {
+    const fetcher = createFetchMock([
+      () => textResponse('payload'),
+      () => textResponse('{"mode":"on"}'),
+      () => textResponse('{"mode":"on"}'),
+    ])
+    const client = bearerClient(fetcher)
+
+    await expect(downloadText(client, blobUrl)).resolves.toStrictEqual({ text: 'payload' })
+    await expect(downloadJson(client, blobUrl)).resolves.toStrictEqual({ value: { mode: 'on' } })
     await expect(
-      uploadText(client, "https://example.blob.core.windows.net/container/file.txt", "hello"),
-    ).rejects.toThrow("uploadText failed: 500 Server Error");
-  });
-});
+      downloadJson(client, blobUrl, (value) => ({ parsed: value })),
+    ).resolves.toStrictEqual({ value: { parsed: { mode: 'on' } } })
+  })
+})
 
-describe("downloadText", () => {
-  test("returns the response and decoded text", async () => {
-    const fetcher = createFetchMock([() => textResponse("payload")]);
-    const client = new AzureClient({
-      fetch: fetcher,
-      credential: { getAuthorizationHeader: async () => "Bearer test" },
-    });
-
-    const response = await downloadText(client, "https://example.blob.core.windows.net/container/file.txt");
-
-    expect(response.response.status).toBe(200);
-    expect(response.text).toBe("payload");
-  });
-});
-
-describe("downloadJson", () => {
-  test("parses JSON payloads", async () => {
-    const fetcher = createFetchMock([() => textResponse('{"foo":"bar"}')]);
-    const client = new AzureClient({
-      fetch: fetcher,
-      credential: { getAuthorizationHeader: async () => "Bearer test" },
-    });
-
-    const response = await downloadJson<{ foo: string }>(
-      client,
-      "https://example.blob.core.windows.net/container/file.json",
-    );
-
-    expect(response.value).toEqual({ foo: "bar" });
-  });
-
-  test("throws on JSON parse failure", async () => {
-    const fetcher = createFetchMock([() => textResponse("not json")]);
-    const client = new AzureClient({
-      fetch: fetcher,
-      credential: { getAuthorizationHeader: async () => "Bearer test" },
-    });
-
-    await expect(downloadJson(client, "https://example.blob.core.windows.net/container/file.json")).rejects.toThrow(
-      "downloadJson failed",
-    );
-  });
-});
-
-describe("table getEntity", () => {
-  test("returns the parsed entity for 200 responses", async () => {
-    const fetcher = createFetchMock([() => jsonResponse({ PartitionKey: "pk", RowKey: "rk", value: "item" })]);
-    const client = new AzureClient({
-      fetch: fetcher,
-      credential: { getAuthorizationHeader: async () => "Bearer test" },
-    });
-
-    const response = await getEntity(client, "https://example.table.core.windows.net/mytable", "pk", "rk", {
-      headers: { "Content-Type": "application/json" },
-    });
-
-    expect(response.entity).toMatchObject({
-      partitionKey: "pk",
-      rowKey: "rk",
-      value: "item",
-    });
-  });
-
-  test("returns undefined for 404 responses", async () => {
-    const fetcher = createFetchMock([() => textResponse("", 404, "Not Found")]);
-    const client = new AzureClient({
-      fetch: fetcher,
-      credential: { getAuthorizationHeader: async () => "Bearer test" },
-    });
-
-    const missing = await getEntity(client, "https://example.table.core.windows.net/mytable", "missing", "rk");
-
-    expect(missing).toMatchObject({
-      response: expect.any(Response),
-      entity: undefined,
-    });
-    expect(missing.response.status).toBe(404);
-  });
-});
-
-describe("upsertEntity", () => {
-  test("returns created false for successful PUT upsert", async () => {
-    const fetcher = createFetchMock([() => textResponse("", 204)]);
-    const client = new AzureClient({
-      fetch: fetcher,
-      credential: { getAuthorizationHeader: async () => "Bearer test" },
-    });
-
-    const response = await upsertEntity(client, "https://example.table.core.windows.net/mytable", {
-      partitionKey: "pk",
-      rowKey: "rk",
-      count: 1,
-    });
-
-    expect(response).toEqual({
-      response: expect.any(Response),
-      created: false,
-    });
-    expect(fetcher).toHaveBeenCalledTimes(1);
-  });
-
-  test("falls back to POST when PUT not found", async () => {
-    const requests: string[] = [];
+describe('table helpers', () => {
+  test('getEntity sends an authorized OData request', async () => {
     const fetcher = createFetchMock([
-      (url) => {
-        requests.push(`PUT ${url}`);
-        return textResponse("", 404, "Not Found");
+      (url, init) => {
+        const headers = new Headers(init.headers)
+        expect(new URL(url).pathname).toBe("/mytable(PartitionKey='pk',RowKey='rk')")
+        expect(headers.get('Authorization')).toBe('Bearer test')
+        expect(headers.get('Accept')).toBe('application/json;odata=nometadata')
+        return jsonResponse({ PartitionKey: 'pk', RowKey: 'rk', value: 'item' })
       },
-      (url) => {
-        requests.push(`POST ${url}`);
-        return textResponse("", 204);
-      },
-    ]);
-    const client = new AzureClient({
-      fetch: fetcher,
-      credential: { getAuthorizationHeader: async () => "Bearer test" },
-    });
+    ])
 
-    const response = await upsertEntity(client, "https://example.table.core.windows.net/mytable", {
-      partitionKey: "pk",
-      rowKey: "rk",
-      count: 2,
-    });
+    await expect(getEntity(bearerClient(fetcher), tableUrl, 'pk', 'rk')).resolves.toStrictEqual({
+      entity: { value: 'item', partitionKey: 'pk', rowKey: 'rk' },
+    })
+  })
 
-    expect(response.created).toBe(true);
-    expect(requests).toHaveLength(2);
-    expect(requests[0]).toBe("PUT https://example.table.core.windows.net/mytable(PartitionKey='pk',RowKey='rk')");
-    expect(requests[1]).toBe("POST https://example.table.core.windows.net/mytable");
-  });
-});
-
-describe("listEntitiesPage", () => {
-  test("caps maxPageSize to 1000 and follows continuation tokens", async () => {
-    const requests: string[] = [];
+  test('upsertEntity sends one authorized PUT', async () => {
     const fetcher = createFetchMock([
-      (url) => {
-        requests.push(url);
-        return textResponse(
-          '{"value":[{"PartitionKey":"pk1","RowKey":"rk1"},{"PartitionKey":"pk2","RowKey":"rk2"}]}',
-          200,
-          "OK",
-          {
-            "x-ms-continuation-NextPartitionKey": "nextPk",
-            "x-ms-continuation-NextRowKey": "nextRk",
-          },
-        );
+      (url, init) => {
+        expect(init.method).toBe('PUT')
+        expect(new URL(url).pathname).toBe("/mytable(PartitionKey='pk',RowKey='rk')")
+        expect(new Headers(init.headers).get('Authorization')).toBe('Bearer test')
+        return textResponse('', 204)
       },
-      (url) => {
-        requests.push(url);
-        return textResponse('{"value":[{"PartitionKey":"pk3","RowKey":"rk3"}]}');
-      },
-    ]);
-    const client = new AzureClient({
-      fetch: fetcher,
-      credential: { getAuthorizationHeader: async () => "Bearer test" },
-    });
+    ])
 
-    const pages = [] as Array<{ entities: Array<Record<string, unknown>> }>;
-    const tokens = [] as Array<string | undefined>;
-    for await (const page of listEntitiesPage(client, "https://example.table.core.windows.net/mytable", {
-      maxPageSize: 2000,
-    })) {
-      pages.push(page);
-      tokens.push(page.continuationToken);
-    }
+    await upsertEntity(bearerClient(fetcher), tableUrl, { partitionKey: 'pk', rowKey: 'rk', n: 1 })
 
-    const firstRequest = new URL(requests[0]);
-    const secondRequest = new URL(requests[1]);
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
 
-    expect(firstRequest.searchParams.get("$top")).toBe("1000");
-    expect(firstRequest.searchParams.get("NextPartitionKey")).toBeNull();
-    expect(firstRequest.searchParams.get("NextRowKey")).toBeNull();
-    expect(secondRequest.searchParams.get("NextPartitionKey")).toBe("nextPk");
-    expect(secondRequest.searchParams.get("NextRowKey")).toBe("nextRk");
-    expect(tokens).toEqual(["NextPartitionKey=nextPk&NextRowKey=nextRk", undefined]);
-    expect(pages).toHaveLength(2);
-    expect(pages[0].entities).toEqual([
-      { partitionKey: "pk1", rowKey: "rk1" },
-      { partitionKey: "pk2", rowKey: "rk2" },
-    ]);
-  });
-});
+  test('listEntitiesPage yields entity pages', async () => {
+    const fetcher = createFetchMock([
+      () => jsonResponse({ value: [{ PartitionKey: 'pk', RowKey: 'rk' }] }),
+    ])
+
+    const pages = await collect(listEntitiesPage(bearerClient(fetcher), tableUrl))
+
+    expect(pages).toStrictEqual([
+      { entities: [{ partitionKey: 'pk', rowKey: 'rk' }], continuationToken: undefined },
+    ])
+  })
+})

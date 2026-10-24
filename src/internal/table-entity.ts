@@ -1,126 +1,36 @@
-interface TableEntityLike {
-  partitionKey?: unknown;
-  rowKey?: unknown;
-  PartitionKey?: unknown;
-  RowKey?: unknown;
-  [key: string]: unknown;
+import { jsonProperty } from './json'
+
+/** Table properties are JSON primitives; the service infers their types. */
+export type TableEntityProperty = string | number | boolean | null
+
+export interface TableEntity {
+  partitionKey: string
+  rowKey: string
+  [property: string]: TableEntityProperty
 }
 
-export interface ParsedTableEntity extends Record<string, unknown> {
-  partitionKey: string;
-  rowKey: string;
+export function serializeEntity({ partitionKey, rowKey, ...properties }: TableEntity): string {
+  return JSON.stringify({ ...properties, PartitionKey: partitionKey, RowKey: rowKey })
 }
 
-export function getPartitionKey(entity: TableEntityLike): string {
-  if (typeof entity.partitionKey === "string") {
-    return entity.partitionKey;
+export function parseEntity(value: unknown): TableEntity {
+  const partitionKey = jsonProperty(value, 'PartitionKey')
+  const rowKey = jsonProperty(value, 'RowKey')
+  if (typeof value !== 'object' || value === null) {
+    throw new TypeError('Invalid table entity response')
   }
 
-  if (typeof entity.PartitionKey === "string") {
-    return entity.PartitionKey;
+  if (typeof partitionKey !== 'string' || typeof rowKey !== 'string') {
+    throw new TypeError('Invalid table entity response')
   }
 
-  throw new Error("Entity is missing PartitionKey/partitionKey");
+  const properties = Object.entries(value).filter(
+    ([name]) => name !== 'PartitionKey' && name !== 'RowKey',
+  )
+  return { ...Object.fromEntries(properties), partitionKey, rowKey }
 }
 
-export function getRowKey(entity: TableEntityLike): string {
-  if (typeof entity.rowKey === "string") {
-    return entity.rowKey;
-  }
-
-  if (typeof entity.RowKey === "string") {
-    return entity.RowKey;
-  }
-
-  throw new Error("Entity is missing RowKey/rowKey");
-}
-
-export function normalizeEntityPayload(
-  entity: TableEntityLike,
-  partitionKey: string,
-  rowKey: string,
-): Record<string, unknown> {
-  const payload: Record<string, unknown> = {};
-
-  for (const [name, value] of Object.entries(entity)) {
-    if (name === "partitionKey" || name === "rowKey") {
-      continue;
-    }
-
-    if (value !== undefined) {
-      payload[name] = value;
-    }
-  }
-
-  payload.PartitionKey = partitionKey;
-  payload.RowKey = rowKey;
-
-  return payload;
-}
-
-export function parseTableEntity(rawEntity: unknown): ParsedTableEntity {
-  if (!isRecord(rawEntity)) {
-    throw new Error("Invalid table entity response");
-  }
-
-  const partitionKeyRaw = rawEntity.PartitionKey;
-  const rowKeyRaw = rawEntity.RowKey;
-
-  if (typeof partitionKeyRaw !== "string" || typeof rowKeyRaw !== "string") {
-    throw new Error("Invalid table entity response");
-  }
-
-  const entity: ParsedTableEntity = {
-    partitionKey: partitionKeyRaw,
-    rowKey: rowKeyRaw,
-  };
-
-  for (const [name, value] of Object.entries(rawEntity)) {
-    if (name === "PartitionKey" || name === "RowKey") {
-      continue;
-    }
-
-    entity[name] = value;
-  }
-
-  return entity;
-}
-
-export function parseTableEntityList(body: string): ParsedTableEntity[] {
-  if (body.length === 0) {
-    return [];
-  }
-
-  const parsed = parseJson(body);
-  if (!isRecord(parsed)) {
-    return [];
-  }
-
-  const rawEntities = parsed.value;
-  if (!Array.isArray(rawEntities)) {
-    return [];
-  }
-
-  const entities: ParsedTableEntity[] = [];
-  for (const entity of rawEntities) {
-    if (!isRecord(entity)) {
-      continue;
-    }
-
-    if (typeof entity.PartitionKey !== "string" || typeof entity.RowKey !== "string") {
-      continue;
-    }
-
-    entities.push(parseTableEntity(entity));
-  }
-
-  return entities;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function parseJson(value: string): unknown {
-  return JSON.parse(value);
+export function parseEntityList(value: unknown): TableEntity[] {
+  const entities = jsonProperty(value, 'value')
+  return Array.isArray(entities) ? entities.map((entity) => parseEntity(entity)) : []
 }

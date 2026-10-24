@@ -1,75 +1,63 @@
-import { resolveAuthorizationHeader, type AzureRequestCredential } from "./internal/request-core";
-import { sanitizeAuthorityHost } from "./internal/url";
-import type { TokenProvider } from "./types";
+import { DefaultAzureCredential } from './default-azure-credential'
+import { getAuthorizationHeader, storageOAuthScope } from './internal/request-core'
+import type { AzureRequestCredential, RequestSigningCredential } from './internal/request-core'
+import { defaultFetch } from './internal/runtime'
+import { requireHttpsUrl } from './internal/url'
 
-type AzureClientCredential = AzureRequestCredential;
+export type AzureClientCredential = AzureRequestCredential | RequestSigningCredential
 
 export interface AzureRequestOverrides {
-  scope?: string | string[];
-  credential?: AzureClientCredential;
-  authorityHost?: string;
+  scope?: string | string[]
+  credential?: AzureClientCredential
+  authorityHost?: string
 }
 
 export interface AzureClientOptions extends AzureRequestOverrides {
-  fetch?: typeof globalThis.fetch;
+  fetch?: typeof globalThis.fetch
 }
 
 export interface AzureRequestInit extends RequestInit {
-  azure?: AzureRequestOverrides;
+  azure?: AzureRequestOverrides
 }
 
 export class AzureClient {
-  private readonly fetcher: typeof globalThis.fetch;
+  private readonly options: AzureClientOptions
+  private readonly fetcher: typeof globalThis.fetch
+  private readonly defaultCredentials = new Map<string | undefined, DefaultAzureCredential>()
 
-  private readonly defaultCredential?: AzureClientCredential;
-
-  private readonly defaultScope?: string | string[];
-
-  private readonly defaultAuthorityHost?: string;
-
-  private readonly defaultTokenProviders = new Map<string, TokenProvider>();
-
-  constructor(options: AzureClientOptions = {}) {
-    this.fetcher = options.fetch ?? globalThis.fetch;
-    this.defaultCredential = options.credential;
-    this.defaultScope = options.scope;
-    this.defaultAuthorityHost = normalizeAuthorityHost(options.authorityHost);
+  public constructor(options: AzureClientOptions = {}) {
+    if (options.authorityHost !== undefined) {
+      requireHttpsUrl(options.authorityHost, 'authorityHost')
+    }
+    this.options = options
+    this.fetcher = options.fetch ?? defaultFetch
   }
 
   public async fetch(input: RequestInfo | URL, init: AzureRequestInit = {}): Promise<Response> {
-    const request = await this.sign(input, init);
-    return this.fetcher(request);
+    const { azure = {}, ...requestInit } = init
+    const request = new Request(input, requestInit)
+    const credential =
+      azure.credential ??
+      this.options.credential ??
+      this.getDefaultCredential(azure.authorityHost ?? this.options.authorityHost)
+    const scope = azure.scope ?? this.options.scope ?? storageOAuthScope
+
+    if ('signRequest' in credential) {
+      await credential.signRequest(request)
+    } else {
+      request.headers.set('Authorization', await getAuthorizationHeader(credential, scope))
+    }
+
+    return await this.fetcher(request)
   }
 
-  public async sign(input: RequestInfo | URL, init: AzureRequestInit = {}): Promise<Request> {
-    const request = new Request(input, this.extractRequestInit(init));
-    const authorization = await this.getAuthorizationHeader(init.azure);
-    request.headers.set("Authorization", authorization);
-    return request;
+  private getDefaultCredential(authorityHost: string | undefined): DefaultAzureCredential {
+    let credential = this.defaultCredentials.get(authorityHost)
+    if (credential === undefined) {
+      credential = new DefaultAzureCredential({ authorityHost, fetch: this.fetcher })
+      this.defaultCredentials.set(authorityHost, credential)
+    }
+
+    return credential
   }
-
-  private async getAuthorizationHeader(overrides: AzureRequestOverrides | undefined): Promise<string> {
-    const credential = overrides?.credential ?? this.defaultCredential;
-    const scope = overrides?.scope ?? this.defaultScope;
-    const authorityHost = normalizeAuthorityHost(overrides?.authorityHost);
-
-    return resolveAuthorizationHeader({
-      credential,
-      scope,
-      authorityHost,
-      fetch: this.fetcher,
-      defaultScope: this.defaultScope,
-      defaultAuthorityHost: this.defaultAuthorityHost,
-      tokenProviders: this.defaultTokenProviders,
-    });
-  }
-
-  private extractRequestInit(init: AzureRequestInit = {}): RequestInit {
-    const { azure: _azure, ...requestInit } = init;
-    return requestInit;
-  }
-}
-
-function normalizeAuthorityHost(authorityHost: string | undefined): string | undefined {
-  return authorityHost == null ? undefined : sanitizeAuthorityHost(authorityHost);
 }

@@ -1,701 +1,451 @@
-import { describe, expect, test, vi } from "vitest";
+import { createHmac } from 'node:crypto'
 
-import {
-  AccountSASPermissions,
-  BlobServiceClient,
-  getAccountNameFromUrl,
-  BlobBatch,
-  BlobBatchClient,
-  StorageSharedKeyCredential,
-} from "../src/blob";
-import { DefaultAzureCredential } from "../src/default-azure-credential";
-import { createFetchMock, textResponse } from "./helpers";
-import * as defaultCredential from "../src/default-credential";
+import { afterEach, describe, expect, test, vi } from 'vitest'
 
-describe("StorageSharedKeyCredential", () => {
-  test("uses Web Crypto signing and caches the imported key", async () => {
-    const cryptoKey = {} as CryptoKey;
-    const importKey = vi.fn(async () => cryptoKey);
-    const sign = vi.fn(async (_algorithm: AlgorithmIdentifier, key: CryptoKey, data: BufferSource) => {
-      expect(key).toBe(cryptoKey);
-      expect(new TextDecoder().decode(data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer))).toBe(
-        "string-to-sign",
-      );
-      return new Uint8Array([1, 2, 3]);
-    });
+import { BlobServiceClient } from '../src/blob-service-client'
+import type { ContainerClient } from '../src/container-client'
+import { StorageSharedKeyCredential } from '../src/storage-shared-key-credential'
+import { collect, createFetchMock, getBodyString, textResponse } from './helpers'
 
-    vi.stubGlobal("crypto", {
-      subtle: {
-        importKey,
-        sign,
-      } as unknown as SubtleCrypto,
-    } as Crypto);
+const accountUrl = 'https://myaccount.blob.core.windows.net'
+const accountKey = 'bXlfYWNjb3VudF9rZXk='
+const signWithAccountKey = (stringToSign: string) =>
+  createHmac('sha256', Buffer.from(accountKey, 'base64')).update(stringToSign).digest('base64')
+const emptyListing =
+  '<EnumerationResults><Blobs></Blobs><NextMarker></NextMarker></EnumerationResults>'
 
-    try {
-      const credential = new StorageSharedKeyCredential("myaccount", "AQID");
+function anonymousClient(fetcher: typeof fetch): BlobServiceClient {
+  return new BlobServiceClient(accountUrl, undefined, { fetch: fetcher })
+}
 
-      const first = await credential.computeHMACSHA256("string-to-sign");
-      const second = await credential.computeHMACSHA256("string-to-sign");
+function blobListing(names: string[], nextMarker = ''): string {
+  const blobs = names.map((name) => `<Blob>${name}<Properties /></Blob>`).join('')
+  return `<EnumerationResults><Blobs>${blobs}</Blobs><NextMarker>${nextMarker}</NextMarker></EnumerationResults>`
+}
 
-      expect(first).toBe("AQID");
-      expect(second).toBe("AQID");
-      expect(importKey).toHaveBeenCalledTimes(1);
-      expect(sign).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-});
+afterEach(() => {
+  vi.useRealTimers()
+})
 
-describe("AccountSASPermissions", () => {
-  test("parses and serializes permission sets", () => {
-    const permissions = AccountSASPermissions.parse("rwdlaf");
+describe('StorageSharedKeyCredential', () => {
+  test('signs with HMAC-SHA256 of the base64 account key', async () => {
+    const credential = new StorageSharedKeyCredential('myaccount', accountKey)
 
-    expect(permissions.list).toBe(true);
-    expect(permissions.read).toBe(true);
-    expect(permissions.write).toBe(true);
-    expect(permissions.delete).toBe(true);
-    expect(permissions.permanentDelete).toBe(false);
-    expect(permissions.deleteVersion).toBe(false);
-    expect(permissions.add).toBe(true);
+    await expect(credential.computeHMACSHA256('string-to-sign')).resolves.toBe(
+      'YVUZyGQhQYkINoGdVZFuZ7o0Vd6Ryuoso8VGjRwqwR0=',
+    )
+  })
+})
 
-    expect(permissions.toString()).toBe("rwdfla");
-  });
+describe('BlobServiceClient URLs', () => {
+  test.each([
+    {
+      kind: 'account key',
+      connectionString: `DefaultEndpointsProtocol=https;AccountName=myaccount;AccountKey=${accountKey};EndpointSuffix=core.windows.net`,
+      url: 'https://myaccount.blob.core.windows.net/',
+    },
+    {
+      kind: 'SAS',
+      connectionString: `BlobEndpoint=${accountUrl}/;SharedAccessSignature=?sp=r&sv=2024-11-04`,
+      url: 'https://myaccount.blob.core.windows.net/?sp=r&sv=2024-11-04',
+    },
+    {
+      kind: 'development storage',
+      connectionString: `DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=${accountKey};BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1/`,
+      url: 'http://127.0.0.1:10000/devstoreaccount1',
+    },
+  ])('builds the service URL from $kind connection strings', ({ connectionString, url }) => {
+    expect(BlobServiceClient.fromConnectionString(connectionString).url).toBe(url)
+  })
 
-  test("rejects invalid permission characters", () => {
-    expect(() => AccountSASPermissions.parse("q")).toThrow("Invalid permission character: q");
-  });
-});
+  test('keeps the SAS query when the URL path ends with a slash', () => {
+    expect(new BlobServiceClient(`${accountUrl}/sub/?sv=1&sig=x`).url).toBe(
+      `${accountUrl}/sub?sv=1&sig=x`,
+    )
+  })
+})
 
-describe("getAccountNameFromUrl", () => {
-  test("parses host-style endpoints", () => {
-    expect(getAccountNameFromUrl("https://myaccount.blob.core.windows.net/container")).toBe("myaccount");
-  });
+describe('Shared Key requests', () => {
+  test.each([
+    {
+      operation: 'container create without a body',
+      send: async (container: ContainerClient) => await container.createIfNotExists(),
+      contentLength: null,
+      signedLines: ['PUT', '', '', '', '', ''],
+      signedHeaders: [],
+      resource: '/myaccount/container\nrestype:container',
+    },
+    {
+      operation: 'request with repeated and mixed-case query parameters',
+      query: '?b=2&a=1&A=0',
+      send: async (container: ContainerClient) => await container.createIfNotExists(),
+      contentLength: null,
+      signedLines: ['PUT', '', '', '', '', ''],
+      signedHeaders: [],
+      resource: '/myaccount/container\na:0,1\nb:2\nrestype:container',
+    },
+    {
+      operation: 'empty upload',
+      send: async (container: ContainerClient) =>
+        await container.getBlockBlobClient('a b.txt').upload(''),
+      contentLength: '0',
+      signedLines: ['PUT', '', '', '', '', 'application/octet-stream'],
+      signedHeaders: ['x-ms-blob-type:BlockBlob'],
+      resource: '/myaccount/container/a%20b.txt',
+    },
+    {
+      operation: 'UTF-8 upload',
+      send: async (container: ContainerClient) =>
+        await container.getBlockBlobClient('a b.txt').upload('héllo'),
+      contentLength: '6',
+      signedLines: ['PUT', '', '', '6', '', 'application/octet-stream'],
+      signedHeaders: ['x-ms-blob-type:BlockBlob'],
+      resource: '/myaccount/container/a%20b.txt',
+    },
+  ])(
+    'signs a $operation',
+    async ({ query = '', send, contentLength, signedLines, signedHeaders, resource }) => {
+      vi.useFakeTimers({ now: new Date('2026-08-24T12:00:00Z'), toFake: ['Date'] })
+      let headers = new Headers()
+      const fetcher = createFetchMock([
+        (_url, init) => {
+          headers = new Headers(init.headers)
+          return textResponse('', 201)
+        },
+      ])
+      const credential = new StorageSharedKeyCredential('myaccount', accountKey)
+      const client = new BlobServiceClient(`${accountUrl}/${query}`, credential, { fetch: fetcher })
 
-  test("parses ip-style endpoints", () => {
-    expect(getAccountNameFromUrl("http://127.0.0.1:10000/devstoreaccount1/container")).toBe("devstoreaccount1");
-  });
-});
+      await send(client.getContainerClient('container'))
 
-describe("BlobServiceClient.fromConnectionString", () => {
-  test("creates shared-key clients from account connection strings", () => {
-    const client = BlobServiceClient.fromConnectionString(
-      "DefaultEndpointsProtocol=https;AccountName=myaccount;AccountKey=bXlfYWNjb3VudF9rZXk=;EndpointSuffix=core.windows.net",
-    );
+      const stringToSign = [
+        ...signedLines,
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        ...signedHeaders,
+        'x-ms-date:Mon, 24 Aug 2026 12:00:00 GMT',
+        'x-ms-version:2024-11-04',
+        resource,
+      ].join('\n')
+      expect(headers.get('Content-Length')).toBe(contentLength)
+      expect(headers.get('Authorization')).toBe(
+        `SharedKey myaccount:${signWithAccountKey(stringToSign)}`,
+      )
+    },
+  )
+})
 
-    expect(client.accountName).toBe("myaccount");
-    expect(client.url).toBe("https://myaccount.blob.core.windows.net/");
-  });
+describe('BlobServiceClient.generateAccountSasUrl', () => {
+  test('signs the canonical Account SAS fields', async () => {
+    const credential = new StorageSharedKeyCredential('myaccount', accountKey)
+    const client = new BlobServiceClient(accountUrl, credential)
 
-  test("appends SAS query for SAS connection strings", async () => {
-    const client = BlobServiceClient.fromConnectionString(
-      "BlobEndpoint=https://myaccount.blob.core.windows.net/;AccountName=myaccount;SharedAccessSignature=?sp=r&sv=2024-11-04",
-    );
+    const sasUrl = await client.generateAccountSasUrl(new Date('2030-01-01T00:00:00.000Z'), {
+      permissions: 'lwr',
+      services: 'fb',
+      resourceTypes: 'ocs',
+      protocol: 'https,http',
+    })
 
-    const endpoint = new URL(client.url);
+    expect(Object.fromEntries(new URL(sasUrl).searchParams)).toStrictEqual({
+      sp: 'rwl',
+      ss: 'bf',
+      srt: 'sco',
+      sv: '2024-11-04',
+      se: '2030-01-01T00:00:00Z',
+      spr: 'https,http',
+      sig: signWithAccountKey(
+        'myaccount\nrwl\nbf\nsco\n\n2030-01-01T00:00:00Z\n\nhttps,http\n2024-11-04\n\n',
+      ),
+    })
+  })
 
-    expect(endpoint.searchParams.get("sp")).toBe("r");
-    expect(endpoint.searchParams.get("sv")).toBe("2024-11-04");
-  });
-
-  test("supports development storage connection strings", () => {
-    const client = BlobServiceClient.fromConnectionString(
-      "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1/",
-    );
-
-    expect(client.accountName).toBe("devstoreaccount1");
-    expect(client.url).toBe("http://127.0.0.1:10000/devstoreaccount1");
-  });
-});
-
-describe("BlobServiceClient.generateAccountSasUrl", () => {
-  test("signs a deterministic Account SAS with canonical fields", async () => {
-    const credential = new StorageSharedKeyCredential("myaccount", "AQID");
-    const computeHMACSHA256 = vi.spyOn(credential, "computeHMACSHA256").mockResolvedValue("+/==");
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", credential);
-
-    const sasUrl = await client.generateAccountSasUrl(new Date("2030-01-01T00:00:00.000Z"), {
-      permissions: "lwr",
-      services: "fb",
-      resourceTypes: "ocs",
-      protocol: "https,http",
-    });
-
-    expect(computeHMACSHA256).toHaveBeenCalledWith(
-      "myaccount\nrwl\nbf\nsco\n\n2030-01-01T00:00:00Z\n\nhttps,http\n2024-11-04\n\n",
-    );
-    expect(new URL(sasUrl).search).toBe(
-      "?sp=rwl&ss=bf&srt=sco&sv=2024-11-04&se=2030-01-01T00%3A00%3A00Z&spr=https%2Chttp&sig=%2B%2F%3D%3D",
-    );
-  });
-
-  test("rejects credentials that cannot sign Account SAS tokens", async () => {
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net");
-
-    await expect(client.generateAccountSasUrl(new Date("2030-01-01T00:00:00Z"), { permissions: "r" })).rejects.toThrow(
-      "requires a StorageSharedKeyCredential",
-    );
-  });
+  test('requires a shared key credential', async () => {
+    await expect(
+      new BlobServiceClient(accountUrl).generateAccountSasUrl(undefined, { permissions: 'r' }),
+    ).rejects.toThrow('requires a StorageSharedKeyCredential')
+  })
 
   test.each([
-    ["invalid expiry", new Date(Number.NaN), { permissions: "r" }],
-    ["empty permissions", new Date("2030-01-01T00:00:00Z"), { permissions: "" }],
-    ["invalid permissions", new Date("2030-01-01T00:00:00Z"), { permissions: "q" }],
-    ["invalid services", new Date("2030-01-01T00:00:00Z"), { permissions: "r", services: "z" }],
-    ["empty services", new Date("2030-01-01T00:00:00Z"), { permissions: "r", services: "" }],
-    ["invalid resource types", new Date("2030-01-01T00:00:00Z"), { permissions: "r", resourceTypes: "z" }],
-    ["empty resource types", new Date("2030-01-01T00:00:00Z"), { permissions: "r", resourceTypes: "" }],
-    ["unsupported protocol", new Date("2030-01-01T00:00:00Z"), { permissions: "r", protocol: "http" }],
-  ])("rejects %s", async (_name, expiry, options) => {
-    const credential = new StorageSharedKeyCredential("myaccount", "AQID");
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", credential);
+    { input: 'an invalid expiry', expiry: new Date(Number.NaN), options: {}, error: 'valid date' },
+    {
+      input: 'an invalid permission',
+      expiry: undefined,
+      options: { permissions: 'rq' },
+      error: 'permissions character: q',
+    },
+    {
+      input: 'empty services',
+      expiry: undefined,
+      options: { permissions: 'r', services: '' },
+      error: 'services cannot be empty',
+    },
+  ])('rejects $input', async ({ expiry, options, error }) => {
+    const credential = new StorageSharedKeyCredential('myaccount', accountKey)
 
-    await expect(client.generateAccountSasUrl(expiry, options)).rejects.toThrow();
-  });
-});
+    await expect(
+      new BlobServiceClient(accountUrl, credential).generateAccountSasUrl(expiry, options),
+    ).rejects.toThrow(error)
+  })
+})
 
-describe("Blob Shared Key content length canonicalization", () => {
-  test.each([
-    { name: "zero", body: "", wireContentLength: "0", signedContentLength: "" },
-    { name: "absent", body: undefined, wireContentLength: null, signedContentLength: "" },
-    { name: "nonzero", body: "abc", wireContentLength: "3", signedContentLength: "3" },
-  ])("canonicalizes $name content length", async ({ body, wireContentLength, signedContentLength }) => {
-    let requestHeaders: Headers | undefined;
+describe('BlockBlobClient', () => {
+  test('download requests the byte range', async () => {
     const fetcher = createFetchMock([
       (_url, init) => {
-        requestHeaders = new Headers(init.headers);
-        return textResponse("", 201);
+        expect(new Headers(init.headers).get('Range')).toBe('bytes=2-4')
+        return textResponse('llo', 206)
       },
-    ]);
-    const credential = new StorageSharedKeyCredential("myaccount", "AQID");
-    const computeHMACSHA256 = vi.spyOn(credential, "computeHMACSHA256").mockResolvedValue("signature");
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", credential, { fetch: fetcher });
+    ])
+    const blob = anonymousClient(fetcher).getContainerClient('container').getBlockBlobClient('a')
 
-    await client.request("PUT", "https://myaccount.blob.core.windows.net/container/blob", {
-      headers: { "x-ms-date": "Mon, 24 Aug 2026 12:00:00 GMT" },
-      body,
-    });
+    const response = await blob.download(2, 3)
 
-    expect(requestHeaders?.get("Content-Length") ?? null).toBe(wireContentLength);
-    expect(computeHMACSHA256).toHaveBeenCalledWith(
-      [
-        "PUT",
-        "",
-        "",
-        signedContentLength,
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "x-ms-date:Mon, 24 Aug 2026 12:00:00 GMT\nx-ms-version:2024-11-04",
-        "/myaccount/container/blob",
-      ].join("\n"),
-    );
-  });
-});
+    await expect(response.text()).resolves.toBe('llo')
+  })
 
-describe("BlockBlobClient", () => {
-  test("uploads content and sets shared-key auth header", async () => {
-    const headers: HeadersInit[] = [];
-    const fetcher = createFetchMock([
-      (url, init) => {
-        headers.push(init.headers as HeadersInit);
-        return textResponse("", 201);
-      },
-    ]);
+  test.each([
+    { status: 202, result: { succeeded: true } },
+    { status: 404, result: { succeeded: false, errorCode: 'BlobNotFound' } },
+  ])('maps a $status delete response', async ({ status, result }) => {
+    const fetcher = createFetchMock([() => textResponse('', status)])
+    const blob = anonymousClient(fetcher).getContainerClient('container').getBlockBlobClient('a')
 
-    const credential = new StorageSharedKeyCredential("myaccount", Buffer.from("my-key").toString("base64"));
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", credential, {
-      fetch: fetcher,
-    });
-    const blobClient = client.getContainerClient("container").getBlockBlobClient("hello/world.txt");
+    await expect(blob.deleteIfExists()).resolves.toStrictEqual(result)
+  })
 
-    const response = await blobClient.upload("héllo");
-    expect(response.status).toBe(201);
-
-    const capturedHeaders = new Headers(headers[0]);
-    expect(capturedHeaders.get("Authorization")).toMatch(/^SharedKey myaccount:/);
-    expect(capturedHeaders.get("x-ms-date")).toBeTruthy();
-    expect(capturedHeaders.get("x-ms-version")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(capturedHeaders.get("Content-Length")).toBe(String(new TextEncoder().encode("héllo").byteLength));
-  });
-
-  test("download returns the native Response", async () => {
-    const fetcher = createFetchMock([() => textResponse("payload", 206)]);
-
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
-      fetch: fetcher,
-    });
-    const blobClient = client.getContainerClient("container").getBlockBlobClient("file.txt");
-
-    const response = await blobClient.download(0, 3);
-
-    expect(response instanceof Response).toBe(true);
-    expect(response.status).toBe(206);
-    await expect(response.text()).resolves.toBe("payload");
-  });
-
-  test("returns false when a blob is missing", async () => {
-    const fetcher = createFetchMock([() => textResponse("", 404)]);
-
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
-      fetch: fetcher,
-    });
-    const blobClient = client.getContainerClient("container").getBlockBlobClient("missing.txt");
-
-    await expect(blobClient.exists()).resolves.toBe(false);
-  });
-
-  test("maps 404 to false for deleteIfExists", async () => {
-    const fetcher = createFetchMock([() => textResponse("", 404)]);
-
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
-      fetch: fetcher,
-    });
-    const blobClient = client.getContainerClient("container").getBlockBlobClient("gone.txt");
-
-    const response = await blobClient.deleteIfExists();
-
-    expect(response).toMatchObject({
-      succeeded: false,
-      errorCode: "BlobNotFound",
-    });
-  });
-
-  test("maps success status codes for deleteIfExists", async () => {
-    const fetcher = createFetchMock([() => textResponse("", 202)]);
-
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
-      fetch: fetcher,
-    });
-    const blobClient = client.getContainerClient("container").getBlockBlobClient("file.txt");
-
-    const response = await blobClient.deleteIfExists();
-
-    expect(response).toEqual({ succeeded: true });
-  });
-
-  test("reads metadata and timestamps from blob properties", async () => {
-    const now = new Date("2026-01-01T00:00:00.000Z");
-    const fetcher = createFetchMock([
-      () => {
-        return new Response("", {
-          status: 200,
-          headers: {
-            etag: '"etag"',
-            "last-modified": now.toUTCString(),
-            "x-ms-meta-foo": "bar",
-            "x-ms-creation-time": now.toUTCString(),
-          },
-        });
-      },
-    ]);
-
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
-      fetch: fetcher,
-    });
-    const blobClient = client.getContainerClient("container").getBlockBlobClient("file.txt");
-    const properties = await blobClient.getProperties();
-
-    expect(properties).toMatchObject({
-      etag: '"etag"',
-      metadata: {
-        foo: "bar",
-      },
-    });
-    expect(properties.lastModified?.toUTCString()).toBe(now.toUTCString());
-    expect(properties.createdOn?.toUTCString()).toBe(now.toUTCString());
-  });
-});
-
-describe("ContainerClient.listBlobsFlat", () => {
-  test("caps maxPageSize to Azure service limits", async () => {
-    const requests: string[] = [];
-    const fetcher = createFetchMock([
-      (url) => {
-        requests.push(url);
-        return textResponse("<EnumerationResults><Blobs></Blobs><NextMarker></NextMarker></EnumerationResults>");
-      },
-    ]);
-
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
-      fetch: fetcher,
-    });
-    const container = client.getContainerClient("container");
-
-    for await (const _ of container.listBlobsFlat().byPage({ maxPageSize: 10_000 })) {
-      // no-op
-    }
-
-    expect(requests).toHaveLength(1);
-    const request = new URL(requests[0]);
-    expect(request.searchParams.get("maxresults")).toBe("5000");
-  });
-
-  test("supports byPage continuation paging", async () => {
-    const requests: string[] = [];
-    const fetcher = createFetchMock([
-      (url) => {
-        requests.push(url);
-        return textResponse(
-          "<EnumerationResults><Blobs><Blob><Name>first</Name></Blob></Blobs><NextMarker>marker</NextMarker></EnumerationResults>",
-        );
-      },
-      () =>
-        textResponse(
-          "<EnumerationResults><Blobs><Blob><Name>second</Name></Blob></Blobs><NextMarker></NextMarker></EnumerationResults>",
-        ),
-    ]);
-
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
-      fetch: fetcher,
-    });
-    const container = client.getContainerClient("container");
-
-    const pages = [] as Array<{ name: string }[]>;
-    const continuationTokens: Array<string | undefined> = [];
-    for await (const page of container.listBlobsFlat().byPage({ maxPageSize: 1 })) {
-      continuationTokens.push(page.continuationToken);
-      pages.push(page.segment.blobItems);
-    }
-
-    expect(pages).toEqual([[{ name: "first" }], [{ name: "second" }]]);
-    const firstRequest = new URL(requests[0]);
-    expect(firstRequest.searchParams.get("maxresults")).toBe("1");
-    expect(firstRequest.searchParams.get("comp")).toBe("list");
-    expect(firstRequest.searchParams.get("restype")).toBe("container");
-    expect(continuationTokens).toEqual(["marker", ""]);
-  });
-
-  test("uses explicit continuation token for a single final page", async () => {
-    const requests: string[] = [];
-    const fetcher = createFetchMock([
-      (url) => {
-        requests.push(url);
-        return textResponse(
-          "<EnumerationResults><Blobs><Blob><Name>only</Name></Blob></Blobs><NextMarker></NextMarker></EnumerationResults>",
-        );
-      },
-    ]);
-
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
-      fetch: fetcher,
-    });
-    const container = client.getContainerClient("container");
-
-    const pages = [] as string[][];
-    for await (const page of container.listBlobsFlat().byPage({ continuationToken: "start token", maxPageSize: 1 })) {
-      pages.push(page.segment.blobItems.map((item) => item.name));
-    }
-
-    expect(pages).toEqual([["only"]]);
-    expect(requests).toHaveLength(1);
-    const request = new URL(requests[0]);
-    expect(request.searchParams.get("marker")).toBe("start token");
-  });
-
-  test("supports empty listing without additional requests", async () => {
-    const requests: string[] = [];
-    const fetcher = createFetchMock([
-      (url) => {
-        requests.push(url);
-        return textResponse("<EnumerationResults><Blobs></Blobs><NextMarker></NextMarker></EnumerationResults>");
-      },
-    ]);
-
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
-      fetch: fetcher,
-    });
-    const container = client.getContainerClient("container");
-
-    const pages = [] as string[][];
-    for await (const page of container.listBlobsFlat().byPage()) {
-      pages.push(page.segment.blobItems.map((item) => item.name));
-    }
-
-    expect(pages).toEqual([[]]);
-    expect(requests).toHaveLength(1);
-  });
-
-  test("skips malformed blob entries and decodes xml entities", async () => {
+  test('reads metadata and timestamps from blob properties', async () => {
+    const now = new Date('2026-01-01T00:00:00.000Z')
     const fetcher = createFetchMock([
       () =>
-        textResponse(
-          "<EnumerationResults><Blobs><Blob><Name>first</Name></Blob><Blob><Properties /></Blob><Blob><Name>name &lt;with&gt; tag</Name></Blob></Blobs><NextMarker>   </NextMarker></EnumerationResults>",
-        ),
-    ]);
-
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
-      fetch: fetcher,
-    });
-    const container = client.getContainerClient("container");
-
-    const pages = [] as string[][];
-    for await (const page of container.listBlobsFlat().byPage()) {
-      pages.push(page.segment.blobItems.map((item) => item.name));
-    }
-
-    expect(pages).toEqual([["first", "name <with> tag"]]);
-    expect(pages[0][1]).toBe("name <with> tag");
-    expect(pages[0]).toHaveLength(2);
-    expect(pages[0][1]).toContain("<with>");
-  });
-});
-
-describe("BlobServiceClient.listContainers", () => {
-  test("caps maxPageSize to Azure service limits", async () => {
-    const requests: string[] = [];
-    const fetcher = createFetchMock([
-      (url) => {
-        requests.push(url);
-        return textResponse(
-          "<EnumerationResults><Containers><Container><Name>container</Name></Container></Containers><NextMarker></NextMarker></EnumerationResults>",
-        );
-      },
-    ]);
-
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
-      fetch: fetcher,
-    });
-
-    for await (const _ of client.listContainers().byPage({ maxPageSize: 9_999 })) {
-      // no-op
-    }
-
-    expect(requests).toHaveLength(1);
-    const request = new URL(requests[0]);
-    expect(request.searchParams.get("maxresults")).toBe("5000");
-  });
-
-  test("supports byPage continuation paging", async () => {
-    const requests: string[] = [];
-    const fetcher = createFetchMock([
-      (url) => {
-        requests.push(url);
-        return textResponse(
-          "<EnumerationResults><Containers><Container><Name>container-one</Name></Container></Containers><NextMarker>marker</NextMarker></EnumerationResults>",
-        );
-      },
-      (url) => {
-        requests.push(url);
-        return textResponse(
-          "<EnumerationResults><Containers><Container><Name>container-two</Name></Container></Containers><NextMarker></NextMarker></EnumerationResults>",
-        );
-      },
-    ]);
-
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
-      fetch: fetcher,
-    });
-
-    const pages = [] as Array<{ name: string }[]>;
-    const continuationTokens: Array<string | undefined> = [];
-    for await (const page of client.listContainers().byPage({ maxPageSize: 1 })) {
-      continuationTokens.push(page.continuationToken);
-      pages.push(page.segment.containerItems);
-    }
-
-    expect(pages).toEqual([[{ name: "container-one" }], [{ name: "container-two" }]]);
-    const firstRequest = new URL(requests[0]);
-    expect(firstRequest.searchParams.get("comp")).toBe("list");
-    expect(firstRequest.searchParams.get("maxresults")).toBe("1");
-    const secondRequest = new URL(requests[1]);
-    expect(secondRequest.searchParams.get("marker")).toBe("marker");
-    expect(continuationTokens).toEqual(["marker", ""]);
-  });
-
-  test("supports explicit continuation token", async () => {
-    const requests: string[] = [];
-    const fetcher = createFetchMock([
-      (url) => {
-        requests.push(url);
-        return textResponse(
-          "<EnumerationResults><Containers><Container><Name>container-b</Name></Container></Containers><NextMarker></NextMarker></EnumerationResults>",
-        );
-      },
-    ]);
-
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
-      fetch: fetcher,
-    });
-
-    const pages = [] as Array<string[]>;
-    for await (const page of client.listContainers().byPage({ continuationToken: "start-token", maxPageSize: 1 })) {
-      pages.push(page.segment.containerItems.map((item) => item.name));
-    }
-
-    expect(pages).toEqual([["container-b"]]);
-    expect(requests).toHaveLength(1);
-    const request = new URL(requests[0]);
-    expect(request.searchParams.get("marker")).toBe("start-token");
-  });
-});
-
-describe("DefaultAzureCredential", () => {
-  test("reuses access token for repeated calls", async () => {
-    const token = {
-      token: "cached-token",
-      tokenType: "Bearer" as const,
-      expiresOnTimestamp: Date.now() + 600_000,
-    };
-
-    const credentialSpy = vi.spyOn(defaultCredential, "getDefaultAzureCredentialToken").mockResolvedValue(token);
-
-    const credential = new DefaultAzureCredential();
-
-    const first = await credential.getAuthorizationHeader("https://storage.azure.com/.default");
-    const second = await credential.getAuthorizationHeader("https://storage.azure.com/.default");
-
-    expect(first).toBe("Bearer cached-token");
-    expect(second).toBe("Bearer cached-token");
-    expect(credentialSpy).toHaveBeenCalledTimes(1);
-
-    credentialSpy.mockRestore();
-  });
-
-  test("keeps separate caches per scope", async () => {
-    const firstToken = {
-      token: "scope-one",
-      tokenType: "Bearer" as const,
-      expiresOnTimestamp: Date.now() + 600_000,
-    };
-    const secondToken = {
-      token: "scope-two",
-      tokenType: "Bearer" as const,
-      expiresOnTimestamp: Date.now() + 600_000,
-    };
-
-    const credentialSpy = vi.spyOn(defaultCredential, "getDefaultAzureCredentialToken");
-    credentialSpy.mockImplementation(async (input) => {
-      if (input.scope === "scope-one") {
-        return firstToken;
-      }
-
-      return secondToken;
-    });
-
-    const credential = new DefaultAzureCredential();
-
-    const first = await credential.getAuthorizationHeader("scope-one");
-    const second = await credential.getAuthorizationHeader("scope-two");
-
-    expect(first).toBe("Bearer scope-one");
-    expect(second).toBe("Bearer scope-two");
-    expect(credentialSpy).toHaveBeenCalledTimes(2);
-
-    credentialSpy.mockRestore();
-  });
-});
-
-describe("BlockBlobClient.downloadToBuffer", () => {
-  test("downloads body directly into a Uint8Array", async () => {
-    const payload = new TextEncoder().encode("hello-from-buffer");
-    const fetcher = createFetchMock([
-      () =>
-        new Response(payload, {
-          status: 200,
+        textResponse('', 200, 'OK', {
+          etag: '"etag"',
+          'last-modified': now.toUTCString(),
+          'x-ms-meta-foo': 'bar',
+          'x-ms-creation-time': now.toUTCString(),
         }),
-    ]);
+    ])
+    const blob = anonymousClient(fetcher).getContainerClient('container').getBlockBlobClient('a')
 
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
-      fetch: fetcher,
-    });
-    const blobClient = client.getContainerClient("container").getBlockBlobClient("file.txt");
+    await expect(blob.getProperties()).resolves.toStrictEqual({
+      etag: '"etag"',
+      lastModified: now,
+      lastAccessed: undefined,
+      createdOn: now,
+      metadata: { foo: 'bar' },
+    })
+  })
 
-    const buffer = await blobClient.downloadToBuffer(0);
+  test('reports failed requests with status and service error code', async () => {
+    const fetcher = createFetchMock([
+      () =>
+        textResponse('', 403, 'Forbidden', {
+          'x-ms-error-code': 'AuthorizationPermissionMismatch',
+        }),
+    ])
+    const blob = anonymousClient(fetcher).getContainerClient('container').getBlockBlobClient('a')
 
-    expect(buffer).toEqual(payload);
-  });
-});
+    await expect(blob.upload('data')).rejects.toMatchObject({
+      name: 'AzureRequestError',
+      status: 403,
+      errorCode: 'AuthorizationPermissionMismatch',
+    })
+  })
+})
 
-describe("Blob Batch", () => {
-  test("creates batch clients from service and container clients", () => {
-    const serviceClient = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined);
-    const serviceBatchClient = serviceClient.getBlobBatchClient();
-    expect(serviceBatchClient).toBeInstanceOf(BlobBatchClient);
+describe('ContainerClient.getBlockBlobClient', () => {
+  test.each(['../other/victim', 'dir/./file.json', '..'])(
+    'rejects the dot segments of %s before sending anything',
+    (blobName) => {
+      const container = new BlobServiceClient(accountUrl).getContainerClient('container')
 
-    const containerClient = serviceClient.getContainerClient("container");
-    const containerBatchClient = containerClient.getBlobBatchClient();
-    expect(containerBatchClient).toBeInstanceOf(BlobBatchClient);
+      expect(() => container.getBlockBlobClient(blobName)).toThrow('"." or ".." path segments')
+    },
+  )
 
-    const batch = containerBatchClient.createBatch();
-    expect(batch).toBeInstanceOf(BlobBatch);
-  });
+  test('keeps nested names and dots inside segments', () => {
+    const container = new BlobServiceClient(accountUrl).getContainerClient('container')
 
-  test("submits a delete-only batch and parses sub responses", async () => {
-    const requests: Array<{ url: string; method?: string; headers?: HeadersInit; body?: string }> = [];
-    const boundary = "batchresponse_123";
+    expect(container.getBlockBlobClient('dir/.config/file.json').url).toBe(
+      `${accountUrl}/container/dir/.config/file.json`,
+    )
+  })
+})
+
+describe('ContainerClient.listBlobsFlat', () => {
+  test('caps maxPageSize to the service limit', async () => {
+    const fetcher = createFetchMock([
+      (url) => {
+        expect(new URL(url).searchParams.get('maxresults')).toBe('5000')
+        return textResponse(emptyListing)
+      },
+    ])
+
+    const pages = anonymousClient(fetcher)
+      .getContainerClient('container')
+      .listBlobsFlat()
+      .byPage({ maxPageSize: 10_000 })
+
+    await expect(collect(pages)).resolves.toHaveLength(1)
+  })
+
+  test('follows continuation markers', async () => {
+    const urls: URL[] = []
+    const fetcher = createFetchMock([
+      (url) => {
+        urls.push(new URL(url))
+        return textResponse(blobListing(['<Name>first</Name>'], 'marker'))
+      },
+      (url) => {
+        urls.push(new URL(url))
+        return textResponse(blobListing(['<Name>second</Name>']))
+      },
+    ])
+
+    const pages = await collect(
+      anonymousClient(fetcher).getContainerClient('container').listBlobsFlat().byPage(),
+    )
+
+    expect(pages).toStrictEqual([
+      { segment: { blobItems: [{ name: 'first' }] }, continuationToken: 'marker' },
+      { segment: { blobItems: [{ name: 'second' }] }, continuationToken: '' },
+    ])
+    expect(Object.fromEntries(urls[0]?.searchParams ?? [])).toStrictEqual({
+      restype: 'container',
+      comp: 'list',
+    })
+    expect(urls[1]?.searchParams.get('marker')).toBe('marker')
+  })
+
+  test('starts from an explicit continuation token', async () => {
+    const fetcher = createFetchMock([
+      (url) => {
+        expect(new URL(url).searchParams.get('marker')).toBe('start token')
+        return textResponse(emptyListing)
+      },
+    ])
+
+    const pages = anonymousClient(fetcher)
+      .getContainerClient('container')
+      .listBlobsFlat()
+      .byPage({ continuationToken: 'start token' })
+
+    await expect(collect(pages)).resolves.toHaveLength(1)
+  })
+
+  test('decodes XML entities, percent-encoded names and keeps whitespace', async () => {
+    const fetcher = createFetchMock([
+      () =>
+        textResponse(
+          blobListing([
+            '<Name>a &lt;b&gt; &amp;lt; &#233;&#x1F600;</Name>',
+            '<Name Encoded="true">c%EF%BF%BE</Name>',
+            '<Name> spaced </Name>',
+          ]),
+        ),
+    ])
+
+    const [page] = await collect(
+      anonymousClient(fetcher).getContainerClient('container').listBlobsFlat().byPage(),
+    )
+
+    expect(page?.segment.blobItems.map(({ name }) => name)).toStrictEqual([
+      'a <b> &lt; é😀',
+      'c\uFFFE',
+      ' spaced ',
+    ])
+  })
+})
+
+describe('BlobServiceClient.listContainers', () => {
+  test('lists container names with the account list query', async () => {
+    const fetcher = createFetchMock([
+      (url) => {
+        expect(Object.fromEntries(new URL(url).searchParams)).toStrictEqual({ comp: 'list' })
+        return textResponse(
+          '<EnumerationResults><Containers><Container><Name>one</Name></Container></Containers><NextMarker /></EnumerationResults>',
+        )
+      },
+    ])
+
+    const pages = await collect(anonymousClient(fetcher).listContainers().byPage())
+
+    expect(pages).toStrictEqual([
+      { segment: { containerItems: [{ name: 'one' }] }, continuationToken: '' },
+    ])
+  })
+})
+
+describe('BlobBatchClient.deleteBlobs', () => {
+  test('sends authorized sub-requests and maps sub-responses by Content-ID', async () => {
     const responseBody = [
-      `--${boundary}`,
-      "Content-Type: application/http",
-      "Content-ID: 0",
-      "",
-      "HTTP/1.1 202 Accepted",
-      "x-ms-request-id: 123",
-      "",
-      `--${boundary}`,
-      "Content-Type: application/http",
-      "Content-ID: 1",
-      "",
-      "HTTP/1.1 404 Not Found",
-      "x-ms-error-code: BlobNotFound",
-      "",
-      `--${boundary}--`,
-    ].join("\r\n");
-
+      '--batchresponse_1',
+      'Content-Type: application/http',
+      'Content-ID: 1',
+      '',
+      'HTTP/1.1 404 The specified blob does not exist.',
+      'x-ms-error-code: BlobNotFound',
+      '',
+      '--batchresponse_1',
+      'Content-Type: application/http',
+      'Content-ID: 0',
+      '',
+      'HTTP/1.1 202 Accepted',
+      '',
+      '--batchresponse_1--',
+    ].join('\r\n')
+    let request: { url: string; init: RequestInit } | undefined
     const fetcher = createFetchMock([
       (url, init) => {
-        requests.push({ url, method: init.method, headers: init.headers, body: init.body as string | undefined });
-        return textResponse(responseBody, 202, "Accepted", {
-          "content-type": `multipart/mixed; boundary=${boundary}`,
-        });
+        request = { url, init }
+        return textResponse(responseBody, 202, 'Accepted', {
+          'content-type': 'multipart/mixed; boundary=batchresponse_1',
+        })
       },
-    ]);
+    ])
+    const credential = { getAuthorizationHeader: async () => 'Bearer batch-token' }
+    const client = new BlobServiceClient(accountUrl, credential, { fetch: fetcher })
 
-    const client = new BlobServiceClient("https://myaccount.blob.core.windows.net", undefined, {
-      fetch: fetcher,
-    });
-    const batchClient = client.getBlobBatchClient();
+    const response = await client
+      .getBlobBatchClient()
+      .deleteBlobs([`${accountUrl}/container/one.txt`, `${accountUrl}/container/two.txt`], {
+        deleteSnapshots: 'include',
+      })
 
-    const batch = batchClient.createBatch();
-    await batch.deleteBlob("https://myaccount.blob.core.windows.net/container/one.txt", undefined, {
-      deleteSnapshots: "include",
-    });
-    await batch.deleteBlob("https://myaccount.blob.core.windows.net/container/two.txt", undefined, {
-      deleteSnapshots: "include",
-    });
+    expect(response).toStrictEqual({
+      subResponses: [
+        { status: 202, errorCode: undefined },
+        { status: 404, errorCode: 'BlobNotFound' },
+      ],
+      subResponsesSucceededCount: 1,
+      subResponsesFailedCount: 1,
+    })
+    expect(new URL(request?.url ?? '').searchParams.get('comp')).toBe('batch')
+    const body = getBodyString(request?.init.body)
+    for (const [index, path] of ['/container/one.txt', '/container/two.txt'].entries()) {
+      expect(body).toContain(`Content-ID: ${index}\r\n\r\nDELETE ${path} HTTP/1.1\r\n`)
+    }
+    expect(body.match(/authorization: Bearer batch-token/gu)).toHaveLength(2)
+    expect(body.match(/x-ms-delete-snapshots: include/gu)).toHaveLength(2)
+  })
 
-    const response = await batchClient.submitBatch(batch);
+  test.each([
+    { account: accountUrl, blob: 'https://other.blob.core.windows.net/container/a.txt' },
+    {
+      account: 'http://127.0.0.1:10000/devstoreaccount1',
+      blob: 'http://127.0.0.1:10000/devstoreaccount2/container/a.txt',
+    },
+  ])('rejects $blob before sending anything', async ({ account, blob }) => {
+    const fetcher = vi.fn<typeof fetch>()
+    const client = new BlobServiceClient(account, undefined, { fetch: fetcher })
 
-    expect(response.status).toBe(202);
-    expect(response.subResponsesSucceededCount).toBe(1);
-    expect(response.subResponsesFailedCount).toBe(1);
-    expect(response.subResponses[0]?.status).toBe(202);
-    expect(response.subResponses[1]?.status).toBe(404);
-    expect(response.subResponses[1]?.errorCode).toBe("BlobNotFound");
-
-    expect(response.subResponses[0]?._request?.method).toBe("DELETE");
-    expect(response.subResponses[0]?._request?.headers["x-ms-delete-snapshots"]).toBe("include");
-
-    expect(requests).toHaveLength(1);
-    const request = requests[0];
-    expect(request.method).toBe("POST");
-
-    const requestUrl = new URL(request.url);
-    expect(requestUrl.searchParams.get("comp")).toBe("batch");
-
-    const contentType = request.headers ? new Headers(request.headers as HeadersInit).get("content-type") : null;
-    expect(contentType).toBeTruthy();
-    expect(contentType).toContain("multipart/mixed; boundary=");
-
-    const requestBody = request.body || "";
-    expect(requestBody).toContain("DELETE /container/one.txt HTTP/1.1");
-    expect(requestBody).toContain("DELETE /container/two.txt HTTP/1.1");
-    expect(requestBody).toContain("x-ms-delete-snapshots: include");
-    expect(requestBody).toContain("Content-ID: 0");
-  });
-});
+    await expect(client.getBlobBatchClient().deleteBlobs([blob])).rejects.toThrow(
+      'does not belong to',
+    )
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+})

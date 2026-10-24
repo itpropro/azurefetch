@@ -1,265 +1,181 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from 'vitest'
 
-import { TokenUnavailableError } from "../src/errors";
-import { getManagedIdentityToken } from "../src/managed-identity";
-import { captureEnv, createFetchMock, getBodyString, jsonResponse, restoreEnv } from "./helpers";
+import { getManagedIdentityToken } from '../src/managed-identity'
+import { TokenUnavailableError } from '../src/token-unavailable-error'
+import { clearCredentialEnvironment, createFetchMock, getBodyString, jsonResponse } from './helpers'
 
-describe("getManagedIdentityToken", () => {
-  let originalEnv: NodeJS.ProcessEnv;
+const scope = 'https://vault.azure.net/.default'
+const tokenResponse = () => jsonResponse({ access_token: 'mi-token', expires_in: 600 })
 
+function useAppService(): void {
+  vi.stubEnv('IDENTITY_ENDPOINT', 'https://appservice.azurewebsites.net/identity')
+  vi.stubEnv('IDENTITY_HEADER', 'app-header-token')
+}
+
+describe('getManagedIdentityToken', () => {
   beforeEach(() => {
-    originalEnv = captureEnv();
-  });
+    clearCredentialEnvironment()
+  })
 
-  afterEach(() => {
-    restoreEnv(originalEnv);
-  });
+  test('rejects missing or non-default scope', async () => {
+    const fetchMock = createFetchMock([])
 
-  test("rejects missing or non-default scope", async () => {
-    const fetchMock = createFetchMock([]);
+    await expect(
+      getManagedIdentityToken({ scope: 'https://vault.azure.net', fetch: fetchMock }),
+    ).rejects.toThrow('Scope must end with /.default')
     await expect(
       getManagedIdentityToken({
-        scope: "https://vault.azure.net",
+        scope: `${scope} https://graph.microsoft.com/.default`,
         fetch: fetchMock,
       }),
-    ).rejects.toThrow("Scope must end with /.default");
+    ).rejects.toThrow('Managed identity requires exactly one scope')
+  })
 
+  test('rejects more than one identity selector', async () => {
     await expect(
       getManagedIdentityToken({
-        scope: "https://vault.azure.net/.default https://graph.microsoft.com/.default",
-        fetch: fetchMock,
-      }),
-    ).rejects.toThrow("Managed identity requires exactly one scope");
-  });
-
-  test("rejects conflicting selector values", async () => {
-    const fetchMock = createFetchMock([]);
-
-    await expect(
-      getManagedIdentityToken({
-        scope: "https://vault.azure.net/.default",
-        clientId: "client",
-        objectId: "obj",
-        fetch: fetchMock,
-      }),
-    ).rejects.toThrow("Specify at most one of clientId, objectId, or resourceId");
-
-    await expect(
-      getManagedIdentityToken({
-        scope: "https://vault.azure.net/.default",
-        clientId: "client",
-        resourceId: "res",
-        fetch: fetchMock,
-      }),
-    ).rejects.toThrow("Specify at most one of clientId, objectId, or resourceId");
-  });
-
-  test("requests app-service token with query and headers", async () => {
-    process.env.IDENTITY_ENDPOINT = "https://appservice.azurewebsites.net/identity";
-    process.env.IDENTITY_HEADER = "app-header-token";
-
-    let capturedRequestUrl: URL | undefined;
-    let capturedHeaders: Headers | undefined;
-
-    const fetchMock = createFetchMock([
-      (url, init) => {
-        capturedRequestUrl = new URL(url);
-        capturedHeaders = new Headers(init.headers);
-
-        return jsonResponse({
-          access_token: "app-token",
-          expires_in: 600,
-        });
-      },
-    ]);
-
-    const token = await getManagedIdentityToken({
-      scope: "https://vault.azure.net/.default",
-      clientId: "my-client",
-      fetch: fetchMock,
-    });
-
-    expect(capturedRequestUrl?.origin).toBe("https://appservice.azurewebsites.net");
-    expect(capturedRequestUrl?.pathname).toBe("/identity");
-    expect(capturedRequestUrl?.searchParams.get("api-version")).toBe("2019-08-01");
-    expect(capturedRequestUrl?.searchParams.get("resource")).toBe("https://vault.azure.net");
-    expect(capturedRequestUrl?.searchParams.get("client_id")).toBe("my-client");
-    expect(capturedHeaders?.get("Metadata")).toBe("true");
-    expect(capturedHeaders?.get("X-IDENTITY-HEADER")).toBe("app-header-token");
-
-    expect(token).toMatchObject({
-      token: "app-token",
-      tokenType: "Bearer",
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  test("requests cloud shell token via form POST and rejects explicit selectors", async () => {
-    process.env.MSI_ENDPOINT = "http://localhost:8080/msi/token";
-    process.env.MSI_SECRET = "ignored";
-
-    await expect(
-      getManagedIdentityToken({
-        scope: "https://vault.azure.net/.default",
-        clientId: "my-client",
+        scope,
+        clientId: 'client',
+        resourceId: 'resource',
         fetch: createFetchMock([]),
       }),
-    ).rejects.toBeInstanceOf(TokenUnavailableError);
+    ).rejects.toThrow('Specify at most one of clientId, objectId, or resourceId')
+  })
 
-    let capturedHeaders: Headers | undefined;
-    let capturedBody: string | undefined;
+  test('requests an App Service token with query and headers', async () => {
+    useAppService()
+    const fetchMock = createFetchMock([
+      (url, init) => {
+        const requestUrl = new URL(url)
+        const headers = new Headers(init.headers)
+        expect(requestUrl.origin + requestUrl.pathname).toBe(
+          'https://appservice.azurewebsites.net/identity',
+        )
+        expect(Object.fromEntries(requestUrl.searchParams)).toStrictEqual({
+          'api-version': '2019-08-01',
+          resource: 'https://vault.azure.net',
+          client_id: 'my-client',
+        })
+        expect(headers.get('X-IDENTITY-HEADER')).toBe('app-header-token')
+        return tokenResponse()
+      },
+    ])
+
+    const token = await getManagedIdentityToken({ scope, clientId: 'my-client', fetch: fetchMock })
+
+    expect(token).toMatchObject({ token: 'mi-token', tokenType: 'Bearer' })
+  })
+
+  test.each([
+    { source: 'App Service', setup: useAppService, parameter: 'mi_res_id' },
+    { source: 'IMDS', setup: () => {}, parameter: 'msi_res_id' },
+  ])('sends the resource ID selector as $parameter to $source', async ({ setup, parameter }) => {
+    setup()
+    let tokenUrl: URL | undefined
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      tokenUrl = new URL(new Request(input).url)
+      return tokenResponse()
+    })
+
+    await getManagedIdentityToken({
+      scope,
+      resourceId: '/subscriptions/s/identity',
+      fetch: fetchMock,
+    })
+
+    expect(tokenUrl?.searchParams.get(parameter)).toBe('/subscriptions/s/identity')
+  })
+
+  test('requests a Cloud Shell token with a form POST and rejects identity selectors', async () => {
+    vi.stubEnv('MSI_ENDPOINT', 'http://localhost:8080/msi/token')
+
+    await expect(
+      getManagedIdentityToken({ scope, clientId: 'my-client', fetch: createFetchMock([]) }),
+    ).rejects.toBeInstanceOf(TokenUnavailableError)
 
     const fetchMock = createFetchMock([
       (url, init) => {
-        capturedHeaders = new Headers(init.headers);
-        capturedBody = getBodyString(init.body);
-
-        expect(url).toBe("http://localhost:8080/msi/token");
-        expect(init.method).toBe("POST");
-
-        return jsonResponse({
-          access_token: "cloud-token",
-          expires_on: 1234,
-        });
+        expect(url).toBe('http://localhost:8080/msi/token')
+        expect(init.method).toBe('POST')
+        expect(new Headers(init.headers).get('Metadata')).toBe('true')
+        expect(Object.fromEntries(new URLSearchParams(getBodyString(init.body)))).toStrictEqual({
+          resource: 'https://vault.azure.net',
+          'api-version': '2017-09-01',
+        })
+        return tokenResponse()
       },
-    ]);
+    ])
 
-    const token = await getManagedIdentityToken({
-      scope: "https://vault.azure.net/.default",
-      fetch: fetchMock,
-    });
+    await expect(getManagedIdentityToken({ scope, fetch: fetchMock })).resolves.toMatchObject({
+      token: 'mi-token',
+    })
+  })
 
-    const body = new URLSearchParams(capturedBody);
-
-    expect(capturedHeaders?.get("Metadata")).toBe("true");
-    expect(capturedHeaders?.get("Content-Type")).toBe("application/x-www-form-urlencoded");
-    expect(body.get("resource")).toBe("https://vault.azure.net");
-    expect(body.get("api-version")).toBe("2017-09-01");
-
-    expect(token.token).toBe("cloud-token");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  test("returns a successful IMDS token response without a redundant request", async () => {
-    let requestUrl: URL | undefined;
-    let requestHeaders: Headers | undefined;
-
+  test('probes IMDS before requesting the token', async () => {
     const fetchMock = createFetchMock([
       (url, init) => {
-        requestUrl = new URL(url);
-        requestHeaders = new Headers(init.headers);
-
-        return jsonResponse({
-          access_token: "imds-token",
-          expires_on: 1234,
-        });
+        expect(url).toBe('http://169.254.169.254/metadata/identity/oauth2/token')
+        expect(new Headers(init.headers).has('Metadata')).toBe(false)
+        expect(init.signal).toBeInstanceOf(AbortSignal)
+        return new Response('missing metadata header', { status: 400 })
       },
-    ]);
+      (url, init) => {
+        const requestUrl = new URL(url)
+        expect(requestUrl.searchParams.get('api-version')).toBe('2018-02-01')
+        expect(requestUrl.searchParams.get('object_id')).toBe('object-1')
+        expect(new Headers(init.headers).get('Metadata')).toBe('true')
+        // Only the probe is time-limited; issuing the first token can take longer.
+        expect(init.signal).toBeUndefined()
+        return tokenResponse()
+      },
+    ])
 
-    process.env.AZURE_POD_IDENTITY_AUTHORITY_HOST = "http://169.254.169.254";
+    const token = await getManagedIdentityToken({ scope, objectId: 'object-1', fetch: fetchMock })
 
-    const token = await getManagedIdentityToken({
-      scope: "https://vault.azure.net/.default",
-      objectId: "object-1",
-      fetch: fetchMock,
-    });
+    expect(token.token).toBe('mi-token')
+  })
 
-    expect(requestUrl?.pathname).toBe("/metadata/identity/oauth2/token");
-    expect(requestUrl?.searchParams.get("api-version")).toBe("2018-02-01");
-    expect(requestUrl?.searchParams.get("resource")).toBe("https://vault.azure.net");
-    expect(requestUrl?.searchParams.get("object_id")).toBe("object-1");
-    expect(requestHeaders?.get("Metadata")).toBe("true");
-
-    expect(token.token).toBe("imds-token");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  test("throws token unavailable on IMDS probe failure", async () => {
+  test('reports IMDS as unavailable when the endpoint cannot be reached', async () => {
     const fetchMock = createFetchMock([
-      () =>
-        new Response("", {
-          status: 500,
-          statusText: "boom",
-        }),
-    ]);
+      () => {
+        throw new TypeError('fetch failed')
+      },
+    ])
 
-    await expect(
-      getManagedIdentityToken({
-        scope: "https://vault.azure.net/.default",
-        fetch: fetchMock,
-      }),
-    ).rejects.toBeInstanceOf(TokenUnavailableError);
-  });
+    await expect(getManagedIdentityToken({ scope, fetch: fetchMock })).rejects.toMatchObject({
+      name: 'TokenUnavailableError',
+      message: 'IMDS endpoint unavailable',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 
-  test("cancels an unavailable IMDS request after the configured timeout", async () => {
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, init: RequestInit = {}) =>
-        new Promise<Response>((_resolve, reject) => {
-          init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
-        }),
-    );
-
-    await expect(
-      getManagedIdentityToken({
-        scope: "https://vault.azure.net/.default",
-        fetch: fetchMock,
-        probeTimeoutMs: 1,
-      }),
-    ).rejects.toThrow("IMDS token endpoint probe timed out");
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  test("translates endpoint token errors", async () => {
-    process.env.MSI_ENDPOINT = "http://localhost:8080/msi/token";
-
+  test('reports a token response that fails mid-body as unavailable', async () => {
+    vi.stubEnv('MSI_ENDPOINT', 'http://localhost:8080/msi/token')
     const fetchMock = createFetchMock([
       () =>
         new Response(
-          JSON.stringify({
-            error: {
-              code: "invalid_resource",
+          new ReadableStream({
+            start(stream) {
+              stream.error(new TypeError('terminated'))
             },
-            error_description: "bad",
           }),
-          {
-            status: 400,
-            statusText: "Bad",
-            headers: {
-              "content-type": "application/json",
-            },
-          },
         ),
-    ]);
+    ])
 
-    await expect(
-      getManagedIdentityToken({
-        scope: "https://vault.azure.net/.default",
-        fetch: fetchMock,
-      }),
-    ).rejects.toMatchObject({
-      name: "TokenRequestError",
-      status: 400,
-      errorCode: "invalid_resource",
-    });
-  });
+    await expect(getManagedIdentityToken({ scope, fetch: fetchMock })).rejects.toMatchObject({
+      name: 'TokenUnavailableError',
+    })
+  })
 
-  test("rejects malformed token response", async () => {
-    const fetchMock = createFetchMock([
-      () =>
-        jsonResponse({
-          token: "missing",
-          refresh_on: "2024-01-01T00:00:00Z",
-        }),
-    ]);
+  test.each([
+    { status: 400, name: 'TokenRequestError' },
+    { status: 503, name: 'TokenUnavailableError' },
+  ])('maps a $status token response to $name', async ({ status, name }) => {
+    vi.stubEnv('MSI_ENDPOINT', 'http://localhost:8080/msi/token')
+    const fetchMock = createFetchMock([() => jsonResponse({ error: 'invalid_resource' }, status)])
 
-    process.env.MSI_ENDPOINT = "http://localhost:8080/msi/token";
-
-    await expect(
-      getManagedIdentityToken({
-        scope: "https://vault.azure.net/.default",
-        fetch: fetchMock,
-      }),
-    ).rejects.toThrow("Missing access_token");
-  });
-});
+    await expect(getManagedIdentityToken({ scope, fetch: fetchMock })).rejects.toMatchObject({
+      name,
+    })
+  })
+})
