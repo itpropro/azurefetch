@@ -17,6 +17,32 @@ export function escapeODataKey(key: string): string {
   return encodeURIComponent(key.replaceAll("'", "''"))
 }
 
+/**
+ * Builds an OData filter such as odata`RowKey eq ${rowKey}`. Strings become quoted literals with
+ * doubled apostrophes and Dates become `datetime'…'` literals. As in the Azure SDK, strings that
+ * the template already quotes or that follow no text are escaped but not quoted.
+ */
+export function odata(strings: TemplateStringsArray, ...values: unknown[]): string {
+  return strings
+    .flatMap((text, index) =>
+      index < values.length ? [text, odataLiteral(values[index], text)] : [text],
+    )
+    .join('')
+}
+
+function odataLiteral(value: unknown, previousText: string): unknown {
+  if (value instanceof Date) {
+    return `datetime'${value.toISOString()}'`
+  }
+
+  if (typeof value !== 'string') {
+    return value
+  }
+
+  const escaped = value.replaceAll("'", "''")
+  return previousText === '' || previousText.trim().endsWith("'") ? escaped : `'${escaped}'`
+}
+
 export async function createTable(
   transport: StorageTransport,
   serviceUrl: string,
