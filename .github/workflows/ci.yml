@@ -36,3 +36,45 @@ jobs:
 
       - name: Check formatting, lint, types, tests, build and edge smoke test
         run: bun run check
+
+  storage-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.19.0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.3
+          no-cache: true
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Start Azurite
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach --name azurite --publish 10000:10000 --publish 10002:10002 \
+            mcr.microsoft.com/azure-storage/azurite:3.37.0@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5 \
+            azurite --blobHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
+          for _ in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/10000) 2>/dev/null && (exec 3<>/dev/tcp/127.0.0.1/10002) 2>/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs azurite
+          exit 1
+
+      - name: Run Blob and Table integration tests
+        run: bun run test:storage:azurite
