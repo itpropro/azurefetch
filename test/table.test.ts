@@ -3,6 +3,7 @@ import { createHmac } from 'node:crypto'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { StorageSharedKeyCredential } from '../src/storage-shared-key-credential'
+import { odata } from '../src/table'
 import { TableClient } from '../src/table-client'
 import { TableServiceClient } from '../src/table-service-client'
 import { collect, createFetchMock, getBodyString, jsonResponse, textResponse } from './helpers'
@@ -10,6 +11,7 @@ import { collect, createFetchMock, getBodyString, jsonResponse, textResponse } f
 const accountUrl = 'https://myaccount.table.core.windows.net'
 const tableUrl = `${accountUrl}/mytable`
 const accountKey = 'bXlfYWNjb3VudF9rZXk='
+const etag = `W/"datetime'2026-08-24T12%3A00%3A00.0000000Z'"`
 const signWithAccountKey = (stringToSign: string) =>
   createHmac('sha256', Buffer.from(accountKey, 'base64')).update(stringToSign).digest('base64')
 
@@ -57,7 +59,7 @@ describe('TableServiceClient', () => {
     const fetcher = createFetchMock([
       (_url, init) => {
         headers = new Headers(init.headers)
-        return jsonResponse({ PartitionKey: 'pk', RowKey: 'rk', name: 'item' })
+        return jsonResponse({ 'odata.etag': etag, PartitionKey: 'pk', RowKey: 'rk', name: 'item' })
       },
     ])
     const credential = new StorageSharedKeyCredential('myaccount', accountKey)
@@ -65,13 +67,13 @@ describe('TableServiceClient', () => {
 
     const entity = await client.getTableClient('mytable').getEntity('pk', 'rk')
 
-    expect(entity).toStrictEqual({ name: 'item', partitionKey: 'pk', rowKey: 'rk' })
+    expect(entity).toStrictEqual({ name: 'item', partitionKey: 'pk', rowKey: 'rk', etag })
     expect(headers.get('Authorization')).toBe(
       `SharedKeyLite myaccount:${signWithAccountKey(
         "Mon, 24 Aug 2026 12:00:00 GMT\n/myaccount/mytable(PartitionKey='pk',RowKey='rk')",
       )}`,
     )
-    expect(headers.get('Accept')).toBe('application/json;odata=nometadata')
+    expect(headers.get('Accept')).toBe('application/json;odata=minimalmetadata')
     expect(headers.get('DataServiceVersion')).toBe('3.0;NetFx')
     expect(headers.get('MaxDataServiceVersion')).toBe('3.0;NetFx')
   })
@@ -85,7 +87,7 @@ describe('TableServiceClient', () => {
     }
     const fetcher = createFetchMock([
       respondTo("/mytable(PartitionKey='pk',RowKey='rk')", () =>
-        jsonResponse({ PartitionKey: 'pk', RowKey: 'rk' }),
+        jsonResponse({ 'odata.etag': etag, PartitionKey: 'pk', RowKey: 'rk' }),
       ),
       respondTo('/mytable()', () => jsonResponse({ value: [] })),
       respondTo("/Tables('mytable')", () => textResponse('', 204)),
@@ -143,25 +145,135 @@ describe('TableClient', () => {
     })
   })
 
-  test('keeps the service keys when an entity also has lowercase key properties', async () => {
+  test('decodes typed properties and prefers system properties over same-named ones', async () => {
     const fetcher = createFetchMock([
-      () => jsonResponse({ PartitionKey: 'pk', RowKey: 'rk', partitionKey: 'x', rowKey: 'y' }),
-      (url) => {
-        expect(new URL(url).pathname).toBe("/mytable(PartitionKey='pk',RowKey='rk')")
-        return textResponse('', 204)
-      },
+      () =>
+        jsonResponse({
+          'odata.metadata': `${accountUrl}/$metadata#mytable/@Element`,
+          'odata.etag': etag,
+          PartitionKey: 'pk',
+          RowKey: 'rk',
+          partitionKey: 'x',
+          etag: 'user etag',
+          text: 'text',
+          integer: 42,
+          double: 1.5,
+          flag: true,
+          'date@odata.type': 'Edm.DateTime',
+          date: '2026-01-02T03:04:05.6789012Z',
+          'big@odata.type': 'Edm.Int64',
+          big: '9007199254740993',
+          'bytes@odata.type': 'Edm.Binary',
+          bytes: 'AQL/',
+          'id@odata.type': 'Edm.Guid',
+          id: '0f8fad5b-d9cb-469f-a165-70867728950e',
+          Timestamp: '2026-08-24T12:00:00.0000000Z',
+        }),
     ])
-    const table = anonymousTable(fetcher)
 
-    const entity = await table.getEntity('pk', 'rk')
-    expect(entity).toMatchObject({ partitionKey: 'pk', rowKey: 'rk' })
-    await table.upsertEntity(entity!)
+    await expect(anonymousTable(fetcher).getEntity('pk', 'rk')).resolves.toStrictEqual({
+      partitionKey: 'pk',
+      rowKey: 'rk',
+      etag,
+      timestamp: '2026-08-24T12:00:00.0000000Z',
+      text: 'text',
+      integer: 42,
+      double: 1.5,
+      flag: true,
+      date: new Date('2026-01-02T03:04:05.678Z'),
+      big: 9007199254740993n,
+      bytes: new Uint8Array([1, 2, 255]),
+      id: { value: '0f8fad5b-d9cb-469f-a165-70867728950e', type: 'Guid' },
+    })
   })
 
   test('returns undefined for a missing entity', async () => {
     const fetcher = createFetchMock([() => textResponse('', 404)])
 
     await expect(anonymousTable(fetcher).getEntity('pk', 'missing')).resolves.toBeUndefined()
+  })
+
+  test('creates entities with annotations for types the service cannot infer', async () => {
+    const fetcher = createFetchMock([
+      (url, init) => {
+        expect(init.method).toBe('POST')
+        expect(url).toBe(tableUrl)
+        expect(new Headers(init.headers).get('Prefer')).toBe('return-no-content')
+        expect(JSON.parse(getBodyString(init.body))).toStrictEqual({
+          text: 'text',
+          integer: 42,
+          flag: true,
+          missing: null,
+          date: '2026-01-02T03:04:05.678Z',
+          'date@odata.type': 'Edm.DateTime',
+          big: '9007199254740993',
+          'big@odata.type': 'Edm.Int64',
+          bytes: 'AQL/',
+          'bytes@odata.type': 'Edm.Binary',
+          binary: 'AQID',
+          'binary@odata.type': 'Edm.Binary',
+          boolean: false,
+          'boolean@odata.type': 'Edm.Boolean',
+          dateTime: '2026-01-02T03:04:05Z',
+          'dateTime@odata.type': 'Edm.DateTime',
+          double: 42,
+          'double@odata.type': 'Edm.Double',
+          guid: '0f8fad5b-d9cb-469f-a165-70867728950e',
+          'guid@odata.type': 'Edm.Guid',
+          int32: 7,
+          'int32@odata.type': 'Edm.Int32',
+          int64: '-1',
+          'int64@odata.type': 'Edm.Int64',
+          string: 'explicit',
+          'string@odata.type': 'Edm.String',
+          'odata.etag': etag,
+          Timestamp: '2026-08-24T12:00:00Z',
+          PartitionKey: 'pk',
+          RowKey: 'rk',
+        })
+        return textResponse('', 204)
+      },
+    ])
+
+    await anonymousTable(fetcher).createEntity({
+      partitionKey: 'pk',
+      rowKey: 'rk',
+      text: 'text',
+      integer: 42,
+      flag: true,
+      missing: null,
+      date: new Date('2026-01-02T03:04:05.678Z'),
+      big: 9007199254740993n,
+      bytes: new Uint8Array([1, 2, 255]),
+      binary: { value: 'AQID', type: 'Binary' },
+      boolean: { value: false, type: 'Boolean' },
+      dateTime: { value: '2026-01-02T03:04:05Z', type: 'DateTime' },
+      double: { value: 42, type: 'Double' },
+      guid: { value: '0f8fad5b-d9cb-469f-a165-70867728950e', type: 'Guid' },
+      int32: { value: 7, type: 'Int32' },
+      int64: { value: '-1', type: 'Int64' },
+      string: { value: 'explicit', type: 'String' },
+      etag,
+      timestamp: '2026-08-24T12:00:00Z',
+    })
+  })
+
+  test('updates with If-Match, merging with PATCH and replacing with PUT', async () => {
+    const requests: { method?: string; ifMatch: string | null }[] = []
+    const record = (_url: string, init: RequestInit) => {
+      requests.push({ method: init.method, ifMatch: new Headers(init.headers).get('If-Match') })
+      return textResponse('', 204)
+    }
+    const fetcher = createFetchMock([record, record])
+    const table = anonymousTable(fetcher)
+
+    await table.updateEntity({ partitionKey: 'pk', rowKey: 'rk', value: 1 }, 'Merge', { etag })
+    await table.updateEntity({ partitionKey: 'pk', rowKey: 'rk', value: 2 }, 'Replace')
+
+    expect(requests).toStrictEqual([
+      { method: 'PATCH', ifMatch: etag },
+      { method: 'PUT', ifMatch: '*' },
+    ])
   })
 
   test('upserts with one unconditional PUT to the escaped entity path', async () => {
@@ -206,7 +318,7 @@ describe('TableClient', () => {
     const fetcher = createFetchMock([
       (url) => {
         expect(new URL(url).searchParams.get('$top')).toBe('1000')
-        return jsonResponse({ value: [{ PartitionKey: 'pk', RowKey: 'rk' }] })
+        return jsonResponse({ value: [{ 'odata.etag': etag, PartitionKey: 'pk', RowKey: 'rk' }] })
       },
     ])
 
@@ -215,39 +327,67 @@ describe('TableClient', () => {
     )
 
     expect(pages).toStrictEqual([
-      { value: [{ partitionKey: 'pk', rowKey: 'rk' }], continuationToken: undefined },
+      { value: [{ partitionKey: 'pk', rowKey: 'rk', etag }], continuationToken: undefined },
     ])
   })
 
-  test('follows continuation tokens', async () => {
+  test('follows continuation tokens with the same filter and projection', async () => {
+    const queries: Record<string, string>[] = []
     const fetcher = createFetchMock([
-      () =>
-        Response.json(
-          { value: [{ PartitionKey: 'pk1', RowKey: 'rk1' }] },
+      (url) => {
+        queries.push(Object.fromEntries(new URL(url).searchParams))
+        return Response.json(
+          { value: [{ 'odata.etag': etag, value: 1 }] },
           {
             headers: {
               'x-ms-continuation-NextPartitionKey': 'nextPk',
               'x-ms-continuation-NextRowKey': 'nextRk',
             },
           },
-        ),
+        )
+      },
       (url) => {
-        const { searchParams } = new URL(url)
-        expect(searchParams.get('NextPartitionKey')).toBe('nextPk')
-        expect(searchParams.get('NextRowKey')).toBe('nextRk')
-        return jsonResponse({ value: [{ PartitionKey: 'pk2', RowKey: 'rk2' }] })
+        queries.push(Object.fromEntries(new URL(url).searchParams))
+        return jsonResponse({ value: [{ 'odata.etag': etag, value: 2 }] })
       },
     ])
 
-    const pages = await collect(anonymousTable(fetcher).listEntities().byPage())
+    const pages = await collect(
+      anonymousTable(fetcher)
+        .listEntities({
+          filter: "PartitionKey eq 'pk'",
+          select: ['partitionKey', 'rowKey', 'timestamp', 'etag', 'value'],
+        })
+        .byPage(),
+    )
 
     expect(pages).toStrictEqual([
       {
-        value: [{ partitionKey: 'pk1', rowKey: 'rk1' }],
+        value: [{ etag, value: 1 }],
         continuationToken: 'NextPartitionKey=nextPk&NextRowKey=nextRk',
       },
-      { value: [{ partitionKey: 'pk2', rowKey: 'rk2' }], continuationToken: undefined },
+      { value: [{ etag, value: 2 }], continuationToken: undefined },
     ])
+    const query = {
+      $filter: "PartitionKey eq 'pk'",
+      $select: 'PartitionKey,RowKey,Timestamp,value',
+    }
+    expect(queries).toStrictEqual([
+      query,
+      { ...query, NextPartitionKey: 'nextPk', NextRowKey: 'nextRk' },
+    ])
+  })
+
+  test('odata quotes and escapes interpolated literals like the Azure SDK', () => {
+    const rowKey = "it's"
+    const after = new Date('2026-01-02T03:04:05.678Z')
+
+    expect(
+      odata`PartitionKey eq ${'pk'} and RowKey eq '${rowKey}' and Timestamp ge ${after} and n lt ${3}`,
+    ).toBe(
+      "PartitionKey eq 'pk' and RowKey eq 'it''s' and Timestamp ge datetime'2026-01-02T03:04:05.678Z' and n lt 3",
+    )
+    expect(odata`${rowKey} eq RowKey`).toBe("it''s eq RowKey")
   })
 
   test('submits one atomic changeset and returns the ordered sub-responses', async () => {
@@ -255,34 +395,49 @@ describe('TableClient', () => {
     const fetcher = createFetchMock([
       (url, init) => {
         request = { url, init }
-        return textResponse(transactionResponseBody([201, 204, 204, 204]), 202)
+        return textResponse(transactionResponseBody([201, 204, 204, 204, 204]), 202)
       },
     ])
 
     const response = await anonymousTable(fetcher).submitTransaction([
-      { action: 'create', entity: { partitionKey: 'p', rowKey: 'r1', value: 'created' } },
+      { action: 'create', entity: { partitionKey: 'p', rowKey: 'r1', count: 1n } },
       { action: 'update', entity: { partitionKey: 'p', rowKey: 'r2', value: 'updated' } },
+      {
+        action: 'update',
+        entity: { partitionKey: 'p', rowKey: 'r5', value: 'merged' },
+        mode: 'Merge',
+      },
       { action: 'upsert', entity: { partitionKey: 'p', rowKey: 'r3', value: 'upserted' } },
       { action: 'delete', partitionKey: 'p', rowKey: 'r4' },
     ])
 
     expect(response).toStrictEqual({
       status: 202,
-      subResponses: [{ status: 201 }, { status: 204 }, { status: 204 }, { status: 204 }],
+      subResponses: [
+        { status: 201 },
+        { status: 204 },
+        { status: 204 },
+        { status: 204 },
+        { status: 204 },
+      ],
     })
     expect(request?.url).toBe(`${accountUrl}/$batch`)
     const operations = getBodyString(request?.init.body)
       .split('Content-Type: application/http')
       .slice(1)
-    expect(operations).toHaveLength(4)
+    expect(operations).toHaveLength(5)
     expect(operations[0]).toContain(`POST ${tableUrl} HTTP/1.1`)
-    expect(operations[0]).toContain('{"value":"created","PartitionKey":"p","RowKey":"r1"}')
+    expect(operations[0]).toContain(
+      '{"count":"1","count@odata.type":"Edm.Int64","PartitionKey":"p","RowKey":"r1"}',
+    )
     expect(operations[1]).toContain(`PUT ${tableUrl}(PartitionKey='p',RowKey='r2') HTTP/1.1`)
     expect(operations[1]).toContain('If-Match: *')
-    expect(operations[2]).toContain(`PUT ${tableUrl}(PartitionKey='p',RowKey='r3') HTTP/1.1`)
-    expect(operations[2]).not.toContain('If-Match')
-    expect(operations[3]).toContain(`DELETE ${tableUrl}(PartitionKey='p',RowKey='r4') HTTP/1.1`)
-    expect(operations[3]).toContain('If-Match: *')
+    expect(operations[2]).toContain(`PATCH ${tableUrl}(PartitionKey='p',RowKey='r5') HTTP/1.1`)
+    expect(operations[2]).toContain('If-Match: *')
+    expect(operations[3]).toContain(`PUT ${tableUrl}(PartitionKey='p',RowKey='r3') HTTP/1.1`)
+    expect(operations[3]).not.toContain('If-Match')
+    expect(operations[4]).toContain(`DELETE ${tableUrl}(PartitionKey='p',RowKey='r4') HTTP/1.1`)
+    expect(operations[4]).toContain('If-Match: *')
   })
 
   test('rejects a transaction whose changeset failed', async () => {

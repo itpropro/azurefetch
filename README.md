@@ -26,7 +26,7 @@ The current release is `azurefetch@0.3.2`. It ships one ESM entrypoint targeting
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | Authentication    | Service principal, workload identity, managed identity, Azure CLI, Azure PowerShell, token credentials, header credentials                     |
 | Blob Storage      | Connection strings; container create, delete, existence, and listing; blob upload, download, properties, and delete; batch delete; account SAS |
-| Table Storage     | Connection strings; table create and delete; entity get, upsert, delete, and listing; atomic transactions                                      |
+| Table Storage     | Connection strings; table create and delete; entity create, get, update, upsert, delete, and queries; etags; EDM types; transactions           |
 | Key Vault secrets | Secret set, get, update, delete, recover, and purge; secret, deleted secret, and version listing                                               |
 | App Configuration | Key-value get, set, delete, and listing; prefixes, labels, filters, connection strings, and sync tokens                                        |
 
@@ -239,6 +239,23 @@ const accountSasUrl = await blobServiceWithSharedKey.generateAccountSasUrl(
     permissions: 'rl',
   },
 )
+```
+
+Table reads return the entity's `etag` and its `timestamp` string. `Date`, `bigint` and `Uint8Array` values are written as `Edm.DateTime`, `Edm.Int64` and `Edm.Binary`; any EDM type can also be set explicitly as `{ value, type }`. Reads decode those three types back and return Guids as `{ value, type: 'Guid' }`. `updateEntity` and `deleteEntity` send the etag as `If-Match` and fail with 412 when it is stale; without one they match any version. `upsertEntity` replaces by default.
+
+```ts
+import { odata } from 'azurefetch'
+
+await table.createEntity({ partitionKey: 'pk', rowKey: 'rk', createdOn: new Date(), size: 1n })
+const entity = await table.getEntity('pk', 'rk')
+await table.updateEntity({ partitionKey: 'pk', rowKey: 'rk', size: 2n }, 'Merge', {
+  etag: entity?.etag,
+})
+
+const query = { filter: odata`PartitionKey eq ${'pk'}`, select: ['rowKey', 'size'] }
+for await (const page of table.listEntities(query).byPage()) {
+  console.log(page.value)
+}
 ```
 
 ## Credentials

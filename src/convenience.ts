@@ -2,7 +2,7 @@ import { BlockBlobClient } from './block-blob-client'
 import type { AzureClient } from './client'
 import type { ListOptions } from './internal/paging'
 import type { StorageClientOptions } from './internal/storage-request'
-import type { TableEntity } from './internal/table-entity'
+import type { TableEntity, TableEntityResult } from './internal/table-entity'
 import { TableClient } from './table-client'
 
 export interface BlobUploadTextOptions {
@@ -19,11 +19,11 @@ export interface BlobDownloadJsonResponse<T> {
 }
 
 export interface TableGetEntityResponse {
-  entity?: TableEntity
+  entity?: TableEntityResult
 }
 
 export interface TableEntityPage {
-  entities: TableEntity[]
+  entities: TableEntityResult[]
   continuationToken?: string
 }
 

@@ -41,7 +41,8 @@ export const blobProtocol: StorageProtocol = { sign: signBlobRequest, headers: {
 export const tableProtocol: StorageProtocol = {
   sign: signTableRequest,
   headers: {
-    Accept: 'application/json;odata=nometadata',
+    // Minimal metadata annotates the property types that JSON cannot express.
+    Accept: 'application/json;odata=minimalmetadata',
     DataServiceVersion: odataVersion,
     MaxDataServiceVersion: odataVersion,
   },

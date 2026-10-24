@@ -13,6 +13,7 @@ import { collect, createFetchMock, getBodyString, jsonResponse, textResponse } f
 
 const blobUrl = 'https://example.blob.core.windows.net/container/file.txt'
 const tableUrl = 'https://example.table.core.windows.net/mytable'
+const etag = `W/"datetime'2026-08-24T12%3A00%3A00.0000000Z'"`
 
 function bearerClient(fetcher: typeof fetch): AzureClient {
   return new AzureClient({
@@ -76,13 +77,13 @@ describe('table helpers', () => {
         const headers = new Headers(init.headers)
         expect(new URL(url).pathname).toBe("/mytable(PartitionKey='pk',RowKey='rk')")
         expect(headers.get('Authorization')).toBe('Bearer test')
-        expect(headers.get('Accept')).toBe('application/json;odata=nometadata')
-        return jsonResponse({ PartitionKey: 'pk', RowKey: 'rk', value: 'item' })
+        expect(headers.get('Accept')).toBe('application/json;odata=minimalmetadata')
+        return jsonResponse({ 'odata.etag': etag, PartitionKey: 'pk', RowKey: 'rk', value: 'item' })
       },
     ])
 
     await expect(getEntity(bearerClient(fetcher), tableUrl, 'pk', 'rk')).resolves.toStrictEqual({
-      entity: { value: 'item', partitionKey: 'pk', rowKey: 'rk' },
+      entity: { value: 'item', partitionKey: 'pk', rowKey: 'rk', etag },
     })
   })
 
@@ -103,13 +104,13 @@ describe('table helpers', () => {
 
   test('listEntitiesPage yields entity pages', async () => {
     const fetcher = createFetchMock([
-      () => jsonResponse({ value: [{ PartitionKey: 'pk', RowKey: 'rk' }] }),
+      () => jsonResponse({ value: [{ 'odata.etag': etag, PartitionKey: 'pk', RowKey: 'rk' }] }),
     ])
 
     const pages = await collect(listEntitiesPage(bearerClient(fetcher), tableUrl))
 
     expect(pages).toStrictEqual([
-      { entities: [{ partitionKey: 'pk', rowKey: 'rk' }], continuationToken: undefined },
+      { entities: [{ partitionKey: 'pk', rowKey: 'rk', etag }], continuationToken: undefined },
     ])
   })
 })

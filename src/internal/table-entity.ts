@@ -1,7 +1,22 @@
 import { jsonProperty } from './json'
+import { decodeBase64ToBytes, encodeBytesToBase64 } from './storage-encoding'
 
-/** Table properties are JSON primitives; the service infers their types. */
-export type TableEntityProperty = string | number | boolean | null
+/** A property with an explicit EDM type; Binary is base64, DateTime ISO and Int64 decimal text. */
+export type TableEdmProperty =
+  | { value: string; type: 'Binary' | 'DateTime' | 'Guid' | 'Int64' | 'String' }
+  | { value: boolean; type: 'Boolean' }
+  | { value: number; type: 'Double' | 'Int32' }
+
+/** The service infers primitive types; Date, bigint and bytes become DateTime, Int64 and Binary. */
+export type TableEntityProperty =
+  | string
+  | number
+  | boolean
+  | null
+  | Date
+  | bigint
+  | Uint8Array
+  | TableEdmProperty
 
 export interface TableEntity {
   partitionKey: string
@@ -9,28 +24,123 @@ export interface TableEntity {
   [property: string]: TableEntityProperty
 }
 
+/** A property as read: DateTime, Int64 and Binary decode to Date, bigint and Uint8Array. */
+export type TableEntityValue =
+  | string
+  | number
+  | boolean
+  | Date
+  | bigint
+  | Uint8Array
+  | { value: string; type: 'Guid' }
+
+/** An entity as read; a projection may omit the keys and timestamp. */
+export interface TableEntityResult {
+  partitionKey?: string
+  rowKey?: string
+  etag: string
+  timestamp?: string
+  [property: string]: TableEntityValue | undefined
+}
+
+/** Service names of the system properties, which reads rename and writes map back. */
+const serviceNames = new Map([
+  ['partitionKey', 'PartitionKey'],
+  ['rowKey', 'RowKey'],
+  ['etag', 'odata.etag'],
+  ['timestamp', 'Timestamp'],
+])
+const publicNames = new Map(Array.from(serviceNames, ([name, serviceName]) => [serviceName, name]))
+
+/** Annotated types without a JSON equivalent; other values stay as parsed. */
+const decoders: Partial<Record<string, (value: string) => TableEntityValue>> = {
+  'Edm.Binary': decodeBase64ToBytes,
+  'Edm.DateTime': (value) => new Date(value),
+  'Edm.Guid': (value) => ({ value, type: 'Guid' }),
+  'Edm.Int64': BigInt,
+}
+
 export function serializeEntity({ partitionKey, rowKey, ...properties }: TableEntity): string {
-  return JSON.stringify({ ...properties, PartitionKey: partitionKey, RowKey: rowKey })
+  const body: Record<string, string | number | boolean | null> = {}
+  for (const [name, property] of Object.entries(properties)) {
+    const serviceName = serviceNames.get(name) ?? name
+    const [value, type] = encodeProperty(property)
+    body[serviceName] = value
+    if (type !== undefined) {
+      body[`${serviceName}@odata.type`] = type
+    }
+  }
+
+  return JSON.stringify({ ...body, PartitionKey: partitionKey, RowKey: rowKey })
 }
 
-export function parseEntity(value: unknown): TableEntity {
-  const partitionKey = jsonProperty(value, 'PartitionKey')
-  const rowKey = jsonProperty(value, 'RowKey')
-  if (typeof value !== 'object' || value === null) {
+/** `$select` of public property names; the etag is always returned and is not selectable. */
+export function serializeSelect(names: string[]): string {
+  return names
+    .filter((name) => name !== 'etag' && name !== 'odata.etag')
+    .map((name) => serviceNames.get(name) ?? name)
+    .join(',')
+}
+
+export function parseEntity(value: unknown): TableEntityResult {
+  const etag = jsonProperty(value, 'odata.etag')
+  if (typeof value !== 'object' || value === null || typeof etag !== 'string') {
     throw new TypeError('Invalid table entity response')
   }
 
-  if (typeof partitionKey !== 'string' || typeof rowKey !== 'string') {
-    throw new TypeError('Invalid table entity response')
+  const properties: Record<string, TableEntityValue> = {}
+  const system: Record<string, string> = {}
+  for (const name of Object.keys(value)) {
+    const property = jsonProperty(value, name)
+    const publicName = publicNames.get(name)
+    if (publicName !== undefined) {
+      if (typeof property === 'string') {
+        system[publicName] = property
+      }
+    } else if (!name.startsWith('odata.') && !name.endsWith('@odata.type')) {
+      const decoded = decodeProperty(property, jsonProperty(value, `${name}@odata.type`))
+      if (decoded !== undefined) {
+        properties[name] = decoded
+      }
+    }
   }
 
-  const properties = Object.entries(value).filter(
-    ([name]) => name !== 'PartitionKey' && name !== 'RowKey',
-  )
-  return { ...Object.fromEntries(properties), partitionKey, rowKey }
+  // System properties win over user properties with the same name.
+  return { ...properties, ...system, etag }
 }
 
-export function parseEntityList(value: unknown): TableEntity[] {
+export function parseEntityList(value: unknown): TableEntityResult[] {
   const entities = jsonProperty(value, 'value')
   return Array.isArray(entities) ? entities.map((entity) => parseEntity(entity)) : []
+}
+
+function decodeProperty(property: unknown, type: unknown): TableEntityValue | undefined {
+  if (typeof property === 'string') {
+    const decode = typeof type === 'string' ? decoders[type] : undefined
+    return decode === undefined ? property : decode(property)
+  }
+
+  return typeof property === 'number' || typeof property === 'boolean' ? property : undefined
+}
+
+function encodeProperty(
+  property: TableEntityProperty,
+): [value: string | number | boolean | null, type?: string] {
+  if (property instanceof Date) {
+    return [property.toISOString(), 'Edm.DateTime']
+  }
+
+  if (typeof property === 'bigint') {
+    return [property.toString(), 'Edm.Int64']
+  }
+
+  if (property instanceof Uint8Array) {
+    return [encodeBytesToBase64(property), 'Edm.Binary']
+  }
+
+  if (typeof property === 'object' && property !== null) {
+    return [property.value, `Edm.${property.type}`]
+  }
+
+  return [property]
 }
