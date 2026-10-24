@@ -1,8 +1,10 @@
+const trailingSlashes = /\/+$/u
+
 export function sanitizeAuthorityHost(authorityHost: string): string {
   const trimmed = authorityHost.trim()
   requireHttpsUrl(trimmed, 'authorityHost')
 
-  return trimmed.replace(/\/+$/, '')
+  return trimmed.replace(trailingSlashes, '')
 }
 
 export function requireHttpsUrl(input: string, name: string): URL {
@@ -12,16 +14,4 @@ export function requireHttpsUrl(input: string, name: string): URL {
   }
 
   return url
-}
-
-export function joinPath(base: string, path: string): string {
-  if (base.endsWith('/') && path.startsWith('/')) {
-    return base + path.slice(1)
-  }
-
-  if (!base.endsWith('/') && !path.startsWith('/')) {
-    return `${base}/${path}`
-  }
-
-  return base + path
 }

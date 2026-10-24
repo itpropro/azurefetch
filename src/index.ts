@@ -1,10 +1,6 @@
-import './configure-default-token-loader'
-
 export { AzureClient } from './client'
 export type { AzureClientOptions, AzureRequestInit, AzureRequestOverrides } from './client'
-export type { AccessToken, TokenReuseOptions, TokenProvider } from './types'
-export { shouldRefreshToken, getAuthorizationHeader } from './token'
-export { createTokenProvider } from './provider'
+export type { AccessToken } from './types'
 export { getServicePrincipalToken } from './service-principal'
 export { getManagedIdentityToken } from './managed-identity'
 export {
@@ -14,7 +10,9 @@ export {
 export type { DeveloperAzureCredentialOptions } from './default-credential'
 export { DefaultAzureCredential } from './default-azure-credential'
 export type { DefaultAzureCredentialOptions } from './default-azure-credential'
-export { AzureFetchError, TokenUnavailableError, TokenRequestError } from './errors'
+export { AzureFetchError } from './errors'
+export { TokenRequestError } from './token-request-error'
+export { TokenUnavailableError } from './token-unavailable-error'
 export * from './blob'
 export * from './table'
 export { AppConfigurationClient, AppConfigurationRequestError } from './app-configuration'

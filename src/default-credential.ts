@@ -1,20 +1,25 @@
-import { TokenUnavailableError, TokenRequestError } from './errors'
-import { getEnvironment, getEnv } from './internal/env'
-import { parseNumericTimestamp } from './internal/oauth'
-import { executeCommand, hasCommandExecution, isCommandUnavailable } from './internal/process'
-import type { CommandExecutionOptions, CommandExecutionResult } from './internal/process'
+import { normalizeCommandToken } from './internal/oauth'
 import { resolveRequiredScopes } from './internal/request-core'
-import { sanitizeAuthorityHost } from './internal/url'
+import {
+  executeCommand,
+  getEnv,
+  hasCommandExecution,
+  isCommandUnavailable,
+  isWindows,
+} from './internal/runtime'
 import { getManagedIdentityToken } from './managed-identity'
 import { getServicePrincipalToken } from './service-principal'
+import { TokenUnavailableError } from './token-unavailable-error'
 import type { AccessToken } from './types'
 
-interface DefaultAzureCredentialOptions {
-  scope: string | string[]
+export interface DefaultAzureCredentialOptions {
   authorityHost?: string
   managedIdentityClientId?: string
   fetch?: typeof globalThis.fetch
-  probeTimeoutMs?: number
+}
+
+export interface DefaultAzureCredentialTokenOptions extends DefaultAzureCredentialOptions {
+  scope: string | string[]
 }
 
 export interface DeveloperAzureCredentialOptions {
@@ -22,147 +27,88 @@ export interface DeveloperAzureCredentialOptions {
   abortSignal?: AbortSignal
 }
 
-interface ExternalCommandCredentialOptions {
-  commandRunner: (
-    command: string,
-    args: string[],
-    options?: CommandExecutionOptions,
-  ) => Promise<CommandExecutionResult>
-  abortSignal?: AbortSignal
-}
-
-interface ExternalCommandTokenPayload {
-  accessToken?: unknown
-  tokenType?: unknown
-  expires_on?: unknown
-  expiresOn?: unknown
-}
+// Azure CLI runs through the Windows shell, so scopes are limited to characters it doesn't interpret.
+const safeCommandScope = /^[\w.:/-]+$/u
 
 export async function getDefaultAzureCredentialToken(
-  options: DefaultAzureCredentialOptions,
+  options: DefaultAzureCredentialTokenOptions,
 ): Promise<AccessToken> {
-  const authorityHost =
-    options.authorityHost == null ? undefined : sanitizeAuthorityHost(options.authorityHost)
   const scopes = resolveRequiredScopes(options.scope)
-  const environment = getEnvironment()
+  const tenantId = getEnv('AZURE_TENANT_ID')
+  const clientId = getEnv('AZURE_CLIENT_ID')
+  const clientSecret = getEnv('AZURE_CLIENT_SECRET')
 
-  const singleScope = scopes.length === 1 ? scopes[0] : undefined
-  const singleDefaultScope = singleScope?.endsWith('/.default') === true ? singleScope : undefined
+  if (tenantId !== undefined && clientId !== undefined && clientSecret !== undefined) {
+    return await getServicePrincipalToken({
+      tenantId,
+      clientId,
+      clientSecret,
+      scope: scopes,
+      authorityHost: options.authorityHost,
+      fetch: options.fetch,
+    })
+  }
 
-  const tenantId = getEnv(environment, 'AZURE_TENANT_ID')
-  const clientId = getEnv(environment, 'AZURE_CLIENT_ID')
-  const clientSecret = getEnv(environment, 'AZURE_CLIENT_SECRET')
-
-  if (tenantId != null && clientId != null && clientSecret != null) {
-    const servicePrincipalToken = await tryAcquireToken(tenantId, async () =>
-      getServicePrincipalToken({
-        tenantId,
-        clientId,
-        clientSecret,
-        scope: scopes,
-        authorityHost,
-        fetch: options.fetch,
-      }),
+  const [scope] = scopes
+  if (scopes.length === 1 && scope?.endsWith('/.default') === true) {
+    const managedIdentityToken = await unlessUnavailable(
+      async () =>
+        await getManagedIdentityToken({
+          scope,
+          clientId: options.managedIdentityClientId,
+          fetch: options.fetch,
+        }),
     )
-
-    if (servicePrincipalToken != null) {
-      return servicePrincipalToken
+    if (managedIdentityToken !== undefined) {
+      return managedIdentityToken
     }
   }
 
-  const managedIdentityToken = await tryAcquireToken(singleDefaultScope, async () =>
-    getManagedIdentityToken({
-      scope: singleDefaultScope!,
-      clientId: options.managedIdentityClientId,
-      fetch: options.fetch,
-      probeTimeoutMs: options.probeTimeoutMs,
-    }),
-  )
-
-  if (managedIdentityToken != null) {
-    return managedIdentityToken
+  const developerToken = await unlessUnavailable(async () => await getDeveloperToken(scopes))
+  if (developerToken !== undefined) {
+    return developerToken
   }
 
-  const cliToken = await tryAcquireToken('azure cli', async () =>
-    getAzureCliToken(scopes, {
-      commandRunner: executeCommand,
-    }),
+  throw new TokenUnavailableError(
+    'Could not find available credentials: environment service principal, managed identity, Azure CLI and Azure PowerShell are unavailable',
   )
-
-  if (cliToken != null) {
-    return cliToken
-  }
-
-  const powershellToken = await tryAcquireToken('azure powershell', async () =>
-    getAzurePowerShellToken(scopes, {
-      commandRunner: executeCommand,
-    }),
-  )
-
-  if (powershellToken != null) {
-    return powershellToken
-  }
-
-  const failures = [
-    tenantId == null || clientId == null || clientSecret == null
-      ? 'missing environment credentials'
-      : undefined,
-    'managed identity unavailable',
-    'azure cli unavailable',
-    'azure powershell unavailable',
-  ].filter((value): value is string => value != null)
-
-  throw new TokenUnavailableError(`Could not find available credentials: ${failures.join(', ')}`)
 }
 
 export async function getDeveloperAzureCredentialToken(
   options: DeveloperAzureCredentialOptions,
 ): Promise<AccessToken> {
   options.abortSignal?.throwIfAborted()
-  const scopes = resolveRequiredScopes(options.scope)
-  const commandOptions = {
-    commandRunner: executeCommand,
-    abortSignal: options.abortSignal,
+  return await getDeveloperToken(resolveRequiredScopes(options.scope), options.abortSignal)
+}
+
+async function getDeveloperToken(scopes: string[], signal?: AbortSignal): Promise<AccessToken> {
+  if (!hasCommandExecution()) {
+    throw new TokenUnavailableError('Command execution is unavailable')
   }
 
-  const cliToken = await tryAcquireToken('azure cli', async () =>
-    getAzureCliToken(scopes, commandOptions),
-  )
-  if (cliToken != null) {
+  const cliToken = await unlessUnavailable(async () => await getAzureCliToken(scopes, signal))
+  if (cliToken !== undefined) {
     return cliToken
   }
 
-  const powershellToken = await tryAcquireToken('azure powershell', async () =>
-    getAzurePowerShellToken(scopes, commandOptions),
+  const powerShellToken = await unlessUnavailable(
+    async () => await getAzurePowerShellToken(scopes, signal),
   )
-  if (powershellToken != null) {
-    return powershellToken
+  if (powerShellToken !== undefined) {
+    return powerShellToken
   }
 
   throw new TokenUnavailableError(
-    'Could not find available developer credentials: azure cli unavailable, azure powershell unavailable',
+    'Could not find available developer credentials: Azure CLI and Azure PowerShell are unavailable',
   )
 }
 
-function tryGetResourceFromScope(scope: string): string {
-  if (!scope.endsWith('/.default')) {
-    return scope
-  }
-
-  return scope.slice(0, -'/.default'.length)
-}
-
-async function tryAcquireToken<T>(
-  shouldTry: unknown,
-  acquire: () => Promise<T>,
-): Promise<T | undefined> {
-  if (shouldTry == null) {
-    return undefined
-  }
-
+async function unlessUnavailable(
+  acquire: () => Promise<AccessToken>,
+): Promise<AccessToken | undefined> {
   try {
     return await acquire()
-  } catch (error: unknown) {
+  } catch (error) {
     if (error instanceof TokenUnavailableError) {
       return undefined
     }
@@ -171,130 +117,76 @@ async function tryAcquireToken<T>(
   }
 }
 
-async function getAzureCliToken(
-  scopes: string[],
-  options: ExternalCommandCredentialOptions,
-): Promise<AccessToken> {
-  options.abortSignal?.throwIfAborted()
-  if (!hasCommandExecution()) {
-    throw new TokenUnavailableError('Command execution is unavailable')
+async function getAzureCliToken(scopes: string[], signal?: AbortSignal): Promise<AccessToken> {
+  if (!scopes.every((scope) => safeCommandScope.test(scope))) {
+    throw new TypeError(
+      'Developer credential scopes may only contain letters, digits and _ . : / -',
+    )
   }
 
-  const command = 'az'
-  const args = ['account', 'get-access-token', '--output', 'json', '--scope', scopes.join(' ')]
-
-  let result: { stdout: string; stderr: string }
+  let output: string
   try {
-    result = await runCredentialCommand(command, args, options)
-  } catch (error: unknown) {
-    options.abortSignal?.throwIfAborted()
-
-    if (isCommandUnavailable(error) || error instanceof TokenUnavailableError) {
-      throw new TokenUnavailableError('Azure CLI is unavailable', error)
-    }
-
-    throw new TokenUnavailableError('Azure CLI token request failed', error)
+    output = await executeCommand(
+      'az',
+      ['account', 'get-access-token', '--output', 'json', '--scope', ...scopes],
+      { signal, shell: isWindows() },
+    )
+  } catch (error) {
+    signal?.throwIfAborted()
+    throw new TokenUnavailableError('Azure CLI is unavailable or not signed in', error)
   }
 
-  return normalizeCommandToken(parseJsonOutput(result.stdout))
+  return normalizeCommandToken(output)
 }
 
 async function getAzurePowerShellToken(
   scopes: string[],
-  options: ExternalCommandCredentialOptions,
+  signal?: AbortSignal,
 ): Promise<AccessToken> {
-  options.abortSignal?.throwIfAborted()
-  const singleScope = scopes.length === 1 ? scopes[0] : undefined
-  if (singleScope == null) {
-    throw new TokenUnavailableError('PowerShell credential requires exactly one scope')
+  const [scope] = scopes
+  if (scopes.length !== 1 || scope === undefined) {
+    throw new TokenUnavailableError('Azure PowerShell requires exactly one scope')
   }
 
-  if (!hasCommandExecution()) {
-    throw new TokenUnavailableError('Command execution is unavailable')
-  }
-
-  const resource = tryGetResourceFromScope(singleScope)
-  const escapedResource = resource.replace(/'/g, "''")
-
+  const resource = scope.endsWith('/.default') ? scope.slice(0, -'/.default'.length) : scope
+  // Az.Accounts 5 returns a SecureString token; NetworkCredential unwraps it on PowerShell 5.1 and 7.
   const script = [
-    "$env:AZUREPS_OUTPUT_PLAINTEXT_AZACCESSTOKEN='true'",
-    `$token = Get-AzAccessToken -ResourceUrl '${escapedResource}'`,
-    '$props = @{',
-    '  accessToken = $token.Token',
-    "  tokenType = if ($token.TokenType) { $token.TokenType } else { 'Bearer' }",
-    '  expiresOn = $token.ExpiresOn',
-    '}',
-    '$props | ConvertTo-Json -Compress',
-  ].join(';')
+    "$ErrorActionPreference = 'Stop'",
+    `$token = Get-AzAccessToken -ResourceUrl '${resource.replaceAll("'", "''")}'`,
+    "$value = if ($token.Token -is [securestring]) { [System.Net.NetworkCredential]::new('', $token.Token).Password } else { $token.Token }",
+    '@{ accessToken = $value; expiresOn = $token.ExpiresOn.ToUnixTimeSeconds() } | ConvertTo-Json -Compress',
+  ].join('; ')
 
-  const candidates = ['pwsh', 'powershell']
-  let lastError: unknown
-
-  for (const command of candidates) {
-    try {
-      const result = await runCredentialCommand(
-        command,
-        ['-NoProfile', '-NoLogo', '-NonInteractive', '-Command', script],
-        options,
-      )
-
-      return normalizeCommandToken(parseJsonOutput(result.stdout))
-    } catch (error: unknown) {
-      options.abortSignal?.throwIfAborted()
-      lastError = error
-
-      if (!isCommandUnavailable(error)) {
-        throw new TokenUnavailableError('Azure PowerShell token request failed', error)
-      }
-    }
-  }
-
-  throw new TokenUnavailableError('Azure PowerShell is unavailable', lastError)
-}
-
-async function runCredentialCommand(
-  command: string,
-  args: string[],
-  options: ExternalCommandCredentialOptions,
-): Promise<CommandExecutionResult> {
-  if (options.abortSignal == null) {
-    return options.commandRunner(command, args)
-  }
-
-  return options.commandRunner(command, args, { abortSignal: options.abortSignal })
-}
-
-function parseJsonOutput(raw: string): unknown {
-  const normalizedRaw = raw.trim()
   try {
-    return JSON.parse(normalizedRaw)
-  } catch {
-    throw new TokenRequestError('Failed to parse command output as JSON')
+    return normalizeCommandToken(await runPowerShell(['pwsh', 'powershell'], script, signal))
+  } catch (error) {
+    signal?.throwIfAborted()
+    throw new TokenUnavailableError(
+      isCommandUnavailable(error)
+        ? 'Azure PowerShell is unavailable'
+        : 'Azure PowerShell token request failed',
+      error,
+    )
   }
 }
 
-function normalizeCommandToken(payload: unknown): AccessToken {
-  if (payload == null || typeof payload !== 'object') {
-    throw new TokenRequestError('Invalid token response format')
-  }
+/** Runs the script with the first PowerShell executable that exists. */
+async function runPowerShell(
+  [command = 'pwsh', ...fallbacks]: string[],
+  script: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  try {
+    return await executeCommand(
+      command,
+      ['-NoProfile', '-NoLogo', '-NonInteractive', '-Command', script],
+      { signal },
+    )
+  } catch (error) {
+    if (fallbacks.length > 0 && isCommandUnavailable(error)) {
+      return await runPowerShell(fallbacks, script, signal)
+    }
 
-  const response = payload as ExternalCommandTokenPayload
-  const tokenValue = response.accessToken
-
-  if (typeof tokenValue !== 'string' || tokenValue.length === 0) {
-    throw new TokenRequestError('Missing accessToken in command response')
-  }
-
-  const expiresValue = response.expires_on ?? response.expiresOn
-  const expiresOnTimestamp = parseNumericTimestamp(expiresValue)
-
-  if (expiresOnTimestamp == null) {
-    throw new TokenRequestError('Unable to parse command token expiration')
-  }
-
-  return {
-    token: tokenValue,
-    tokenType: 'Bearer',
-    expiresOnTimestamp,
+    throw error
   }
 }

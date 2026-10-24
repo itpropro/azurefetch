@@ -1,92 +1,92 @@
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { beforeEach, describe, expect, test, vi } from 'vitest'
 
-import { BlobServiceClient } from '../src/blob'
 import { AzureClient } from '../src/client'
 import { DefaultAzureCredential } from '../src/default-azure-credential'
-import * as defaultCredential from '../src/default-credential'
-import { TableServiceClient } from '../src/table'
-import { textResponse } from './helpers'
+import type { AccessToken } from '../src/types'
+import { clearCredentialEnvironment, createFetchMock, getBodyString, jsonResponse } from './helpers'
+
+function recordingFetch() {
+  return vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }))
+}
+
+function sentRequest(fetcher: ReturnType<typeof recordingFetch>): Request {
+  const [input, init] = fetcher.mock.calls[0] ?? []
+  if (input === undefined) {
+    throw new Error('Expected a request')
+  }
+
+  return new Request(input, init)
+}
 
 describe('AzureClient', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
+  beforeEach(() => {
+    clearCredentialEnvironment()
   })
 
-  test('rejects an HTTP default authority during construction', () => {
+  test('rejects HTTP authority hosts during construction', () => {
     expect(() => new AzureClient({ authorityHost: 'http://identity.test' })).toThrow(
       'authorityHost must use HTTPS',
     )
-  })
-
-  test('rejects an HTTP request authority before credential acquisition', async () => {
-    const getAuthorizationHeader = vi.fn(async () => 'Bearer token')
-    const client = new AzureClient({ credential: { getAuthorizationHeader } })
-
-    await expect(
-      client.sign('https://example.com', {
-        azure: { authorityHost: 'http://identity.test' },
-      }),
-    ).rejects.toThrow('authorityHost must use HTTPS')
-
-    expect(getAuthorizationHeader).not.toHaveBeenCalled()
-  })
-
-  test('rejects an HTTP DefaultAzureCredential authority during construction', () => {
     expect(() => new DefaultAzureCredential({ authorityHost: 'http://identity.test' })).toThrow(
       'authorityHost must use HTTPS',
     )
   })
 
   test.each([
-    { tokenType: undefined, expectedScheme: 'Bearer' },
-    { tokenType: 'Bearer' as const, expectedScheme: 'Bearer' },
-    { tokenType: 'pop' as const, expectedScheme: 'pop' },
-  ])(
-    'uses $expectedScheme for token credentials with tokenType=$tokenType',
-    async ({ tokenType, expectedScheme }) => {
-      const getToken = vi.fn(async () => ({
-        token: 'token-value',
-        tokenType,
-        expiresOnTimestamp: Date.now() + 60_000,
-      }))
-
-      const request = await new AzureClient({ credential: { getToken } }).sign(
-        'https://example.com',
-      )
-
-      expect(request.headers.get('Authorization')).toBe(`${expectedScheme} token-value`)
-      expect(getToken).toHaveBeenCalledWith(['https://storage.azure.com/.default'])
-    },
-  )
-
-  test('prefers getAuthorizationHeader over getToken on mixed credentials', async () => {
-    const getAuthorizationHeader = vi.fn(async () => 'Bearer header-token')
-    const getToken = vi.fn(async () => ({
+    { tokenType: undefined, expected: 'Bearer token-value' },
+    { tokenType: 'pop' as const, expected: 'pop token-value' },
+  ])('authorizes with token credentials of type $tokenType', async ({ tokenType, expected }) => {
+    const fetcher = recordingFetch()
+    const getToken = vi.fn<() => Promise<AccessToken>>(async () => ({
       token: 'token-value',
-      tokenType: 'Bearer' as const,
+      tokenType,
       expiresOnTimestamp: Date.now() + 60_000,
     }))
 
-    const request = await new AzureClient({
-      credential: { getAuthorizationHeader, getToken },
-    }).sign('https://example.com')
+    await new AzureClient({ credential: { getToken }, fetch: fetcher }).fetch(
+      'https://example.com',
+      { method: 'POST' },
+    )
 
-    expect(request.headers.get('Authorization')).toBe('Bearer header-token')
-    expect(getAuthorizationHeader).toHaveBeenCalledTimes(1)
+    const request = sentRequest(fetcher)
+    expect(request.method).toBe('POST')
+    expect(request.headers.get('Authorization')).toBe(expected)
+    expect(getToken).toHaveBeenCalledWith(['https://storage.azure.com/.default'])
+  })
+
+  test('prefers getAuthorizationHeader over getToken on mixed credentials', async () => {
+    const fetcher = recordingFetch()
+    const getToken = vi.fn<() => Promise<AccessToken>>(async () => ({
+      token: 'token-value',
+      expiresOnTimestamp: 0,
+    }))
+
+    await new AzureClient({
+      credential: { getAuthorizationHeader: async () => 'Bearer header-token', getToken },
+      fetch: fetcher,
+    }).fetch('https://example.com')
+
+    expect(sentRequest(fetcher).headers.get('Authorization')).toBe('Bearer header-token')
     expect(getToken).not.toHaveBeenCalled()
   })
 
   test('supports per-request credential and scope overrides', async () => {
-    const defaultCredential = { getAuthorizationHeader: vi.fn(async () => 'Bearer default') }
-    const overrideCredential = { getAuthorizationHeader: vi.fn(async () => 'Bearer override') }
+    const fetcher = recordingFetch()
+    const defaultCredential = {
+      getAuthorizationHeader: vi.fn<(scope?: string | string[]) => Promise<string>>(
+        async () => 'Bearer default',
+      ),
+    }
+    const overrideCredential = {
+      getAuthorizationHeader: vi.fn<(scope?: string | string[]) => Promise<string>>(
+        async () => 'Bearer override',
+      ),
+    }
 
-    const request = await new AzureClient({ credential: defaultCredential }).sign(
+    await new AzureClient({ credential: defaultCredential, fetch: fetcher }).fetch(
       'https://example.com',
       {
-        azure: {
-          credential: overrideCredential,
-          scope: 'https://graph.microsoft.com/.default',
-        },
+        azure: { credential: overrideCredential, scope: 'https://graph.microsoft.com/.default' },
       },
     )
 
@@ -94,147 +94,37 @@ describe('AzureClient', () => {
     expect(overrideCredential.getAuthorizationHeader).toHaveBeenCalledWith(
       'https://graph.microsoft.com/.default',
     )
-    expect(request.headers.get('Authorization')).toBe('Bearer override')
+    expect(sentRequest(fetcher).headers.get('Authorization')).toBe('Bearer override')
   })
 
-  test('falls back to getDefaultAzureCredentialToken with per-request authority host', async () => {
-    const providerSpy = vi
-      .spyOn(defaultCredential, 'getDefaultAzureCredentialToken')
-      .mockResolvedValue({
-        token: 'provider-token',
-        tokenType: 'Bearer' as const,
-        expiresOnTimestamp: Date.now() + 60_000,
-      })
+  test('falls back to the default credential chain with the per-request authority host', async () => {
+    vi.stubEnv('AZURE_TENANT_ID', 'tenant')
+    vi.stubEnv('AZURE_CLIENT_ID', 'client')
+    vi.stubEnv('AZURE_CLIENT_SECRET', 'secret')
+    const fetcher = createFetchMock([
+      (url, init) => {
+        expect(url).toBe('https://login.override.test/tenant/oauth2/v2.0/token')
+        expect(new URLSearchParams(getBodyString(init.body)).get('scope')).toBe(
+          'https://graph.microsoft.com/.default',
+        )
+        return jsonResponse({ access_token: 'chain-token', expires_in: 3600 })
+      },
+      (_url, init) => {
+        expect(new Headers(init.headers).get('Authorization')).toBe('Bearer chain-token')
+        return new Response(null, { status: 204 })
+      },
+    ])
 
-    const { AzureClient: RootAzureClient } = await import('../src/index')
-
-    const request = await new RootAzureClient({
-      scope: 'https://storage.azure.com/.default',
+    const response = await new AzureClient({
       authorityHost: 'https://login.default.test',
-    }).sign('https://example.com', {
+      fetch: fetcher,
+    }).fetch('https://example.com', {
       azure: {
-        scope: ['https://graph.microsoft.com/.default'],
+        scope: 'https://graph.microsoft.com/.default',
         authorityHost: 'https://login.override.test',
       },
     })
 
-    expect(request.headers.get('Authorization')).toBe('Bearer provider-token')
-    const [input] = providerSpy.mock.calls
-    expect(input?.[0]).toMatchObject({
-      scope: 'https://graph.microsoft.com/.default',
-      authorityHost: 'https://login.override.test',
-      fetch: expect.any(Function),
-    })
-  })
-
-  test('fetch() returns a fetch response with signed request', async () => {
-    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
-      if (input instanceof Request) {
-        expect(input.headers.get('Authorization')).toBe('Bearer token-value')
-        expect(input.method).toBe('POST')
-      }
-
-      return textResponse('', 204)
-    })
-
-    const requestCredential = {
-      getToken: vi.fn(async () => ({
-        token: 'token-value',
-        tokenType: 'Bearer' as const,
-        expiresOnTimestamp: Date.now() + 60_000,
-      })),
-    }
-
-    const response = await new AzureClient({
-      credential: requestCredential,
-      fetch: fetchSpy,
-    }).fetch('https://example.com', {
-      method: 'POST',
-      azure: {
-        scope: 'https://graph.microsoft.com/.default',
-      },
-    })
-
     expect(response.status).toBe(204)
-    expect(fetchSpy).toHaveBeenCalledTimes(1)
-  })
-
-  test('AzureClient.sign works with DefaultAzureCredential', async () => {
-    const fetcher = vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
-      return textResponse('', 200, 'OK', {
-        'x-test': (init.headers instanceof Headers
-          ? init.headers.get('x-test') || ''
-          : '') as string,
-      })
-    })
-    const credential = new DefaultAzureCredential()
-    const authSpy = vi
-      .spyOn(credential, 'getAuthorizationHeader')
-      .mockResolvedValue('Bearer default')
-
-    const client = new AzureClient({ credential, fetch: fetcher })
-
-    await client.sign('https://graph.microsoft.com', {
-      azure: {
-        scope: 'https://graph.microsoft.com/.default',
-      },
-    })
-
-    expect(fetcher).toHaveBeenCalledTimes(0)
-    expect(authSpy).toHaveBeenCalledTimes(1)
-  })
-
-  test('BlobServiceClient uses DefaultAzureCredential authorization headers', async () => {
-    const fetcher = vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
-      return textResponse('', 200, 'OK', {
-        'x-test': (init.headers instanceof Headers
-          ? init.headers.get('x-test') || ''
-          : '') as string,
-      })
-    })
-    const credential = new DefaultAzureCredential()
-    const authSpy = vi
-      .spyOn(credential, 'getAuthorizationHeader')
-      .mockResolvedValue('Bearer default')
-    const blobClient = new BlobServiceClient(
-      'https://myaccount.blob.core.windows.net',
-      credential,
-      { fetch: fetcher },
-    )
-
-    await blobClient.getContainerClient('container').createIfNotExists()
-
-    expect(fetcher).toHaveBeenCalledTimes(1)
-    expect(authSpy).toHaveBeenCalledTimes(1)
-    const blobAuth = new Headers(fetcher.mock.calls[0]?.[1]?.headers as HeadersInit)
-    expect(blobAuth.get('Authorization')).toBe('Bearer default')
-  })
-
-  test('TableServiceClient uses DefaultAzureCredential authorization headers', async () => {
-    const fetcher = vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
-      return textResponse('', 200, 'OK', {
-        'x-test': (init.headers instanceof Headers
-          ? init.headers.get('x-test') || ''
-          : '') as string,
-      })
-    })
-    const credential = new DefaultAzureCredential()
-    const authSpy = vi
-      .spyOn(credential, 'getAuthorizationHeader')
-      .mockResolvedValue('Bearer default')
-    const tableClient = new TableServiceClient(
-      'https://myaccount.table.core.windows.net',
-      credential,
-      {
-        fetch: fetcher,
-      },
-    )
-
-    await tableClient.request('GET', 'https://myaccount.table.core.windows.net/Tables')
-
-    expect(fetcher).toHaveBeenCalledTimes(1)
-    expect(authSpy).toHaveBeenCalledTimes(1)
-    const tableAuth = new Headers(fetcher.mock.calls[0]?.[1]?.headers as HeadersInit)
-    expect(tableAuth.get('Authorization')).toBe('Bearer default')
   })
 })

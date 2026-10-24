@@ -245,7 +245,7 @@ const accountSasUrl = await blobServiceWithSharedKey.generateAccountSasUrl(
 - `getAuthorizationHeader(scope?)`
 - `getToken(scopes)`
 
-If no credential is provided, it falls back to the default token loader from the main package.
+If no credential is provided, it uses a `DefaultAzureCredential` for the configured authority host.
 
 Custom authority hosts, Key Vault URLs, and App Configuration endpoints must use HTTPS.
 
@@ -280,7 +280,7 @@ const token = await getDefaultAzureCredentialToken({
 })
 ```
 
-`globalThis.fetch` is required for managed identity and service principal flows. CLI and PowerShell are only attempted when command execution is available, including Node-compatible runtimes and Deno.
+`globalThis.fetch` is required for managed identity and service principal flows. CLI and PowerShell are only attempted where `node:child_process` is available: Node, Bun, and Deno 2.
 
 ### Developer credential flow
 

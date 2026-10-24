@@ -4,13 +4,3 @@ export interface AccessToken {
   expiresOnTimestamp: number
   refreshAfterTimestamp?: number
 }
-
-export interface TokenReuseOptions {
-  now?: number
-  refreshSkewMs?: number
-}
-
-export interface TokenProvider {
-  getToken(): Promise<AccessToken>
-  getAuthorizationHeader(): Promise<string>
-}

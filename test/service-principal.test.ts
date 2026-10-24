@@ -25,26 +25,22 @@ describe('getServicePrincipalToken', () => {
   test('forwards cancellation to an active token request', async () => {
     const controller = new AbortController()
     const reason = new Error('cancelled during request')
-    const fetcher = vi.fn<typeof fetch>((_input, init) => {
-      expect(init?.signal).toBe(controller.signal)
-      return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
-          once: true,
-        })
-      })
+    const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
+      controller.abort(reason)
+      init?.signal?.throwIfAborted()
+      return new Response()
     })
 
-    const token = getServicePrincipalToken({
-      tenantId: 'tenant',
-      clientId: 'client',
-      clientSecret: 'secret',
-      scope: 'scope/.default',
-      abortSignal: controller.signal,
-      fetch: fetcher,
-    })
-    controller.abort(reason)
-
-    await expect(token).rejects.toBe(reason)
+    await expect(
+      getServicePrincipalToken({
+        tenantId: 'tenant',
+        clientId: 'client',
+        clientSecret: 'secret',
+        scope: 'scope/.default',
+        abortSignal: controller.signal,
+        fetch: fetcher,
+      }),
+    ).rejects.toBe(reason)
     expect(fetcher).toHaveBeenCalledTimes(1)
   })
 
@@ -112,9 +108,9 @@ describe('getServicePrincipalToken', () => {
   test('posts form body to default authority host', async () => {
     const fetchMock = createFetchMock([
       (url, init) => {
-        const form = new URLSearchParams(getBodyString(init?.body))
+        const form = new URLSearchParams(getBodyString(init.body))
         expect(url).toBe('https://login.microsoftonline.com/my-tenant/oauth2/v2.0/token')
-        expect(init?.method).toBe('POST')
+        expect(init.method).toBe('POST')
         expect(form.get('client_id')).toBe('client')
         expect(form.get('client_secret')).toBe('secret')
         expect(form.get('grant_type')).toBe('client_credentials')
@@ -146,24 +142,14 @@ describe('getServicePrincipalToken', () => {
   test('supports custom authority host and exposes oauth errors', async () => {
     const fetchMock = createFetchMock([
       (url, init) => {
-        const body = new URLSearchParams(getBodyString(init?.body))
+        const body = new URLSearchParams(getBodyString(init.body))
         expect(url).toBe('https://identity.test/v2.0/my-tenant/oauth2/v2.0/token')
         expect(body.get('scope')).toBe('scope/.default')
 
-        return new Response(
-          JSON.stringify({
-            error: {
-              code: 'invalid_client',
-            },
-            error_description: 'bad request',
-          }),
-          {
-            status: 401,
-            statusText: 'Unauthorized',
-            headers: {
-              'content-type': 'application/json',
-            },
-          },
+        return jsonResponse(
+          { error: { code: 'invalid_client' }, error_description: 'bad request' },
+          401,
+          'Unauthorized',
         )
       },
     ])

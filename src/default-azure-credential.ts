@@ -1,60 +1,44 @@
 import { getDefaultAzureCredentialToken } from './default-credential'
+import type { DefaultAzureCredentialOptions } from './default-credential'
 import { resolveRequiredScopes, storageOAuthScope } from './internal/request-core'
-import { sanitizeAuthorityHost } from './internal/url'
-import { createTokenProvider } from './provider'
-import type { AccessToken, TokenProvider } from './types'
+import { cacheToken, formatAuthorizationHeader } from './internal/token'
+import { requireHttpsUrl } from './internal/url'
+import type { AccessToken } from './types'
 
-export interface DefaultAzureCredentialOptions {
-  authorityHost?: string
-  managedIdentityClientId?: string
-  fetch?: typeof globalThis.fetch
-}
+export type { DefaultAzureCredentialOptions } from './default-credential'
 
 export class DefaultAzureCredential {
-  private readonly providers = new Map<string, TokenProvider>()
-
   private readonly options: DefaultAzureCredentialOptions
+  private readonly tokens = new Map<string, () => Promise<AccessToken>>()
 
-  constructor(options: DefaultAzureCredentialOptions = {}) {
-    this.options = {
-      ...options,
-      authorityHost:
-        options.authorityHost == null ? undefined : sanitizeAuthorityHost(options.authorityHost),
+  public constructor(options: DefaultAzureCredentialOptions = {}) {
+    if (options.authorityHost !== undefined) {
+      requireHttpsUrl(options.authorityHost, 'authorityHost')
     }
-  }
-
-  private getTokenProvider(scopes: string[]): TokenProvider {
-    const cacheKey = JSON.stringify(scopes)
-    const existingProvider = this.providers.get(cacheKey)
-    if (existingProvider != null) {
-      return existingProvider
-    }
-
-    const provider = createTokenProvider({
-      loadToken: async () =>
-        getDefaultAzureCredentialToken({
-          scope: scopes.length === 1 ? scopes[0] : scopes,
-          fetch: this.options.fetch,
-          authorityHost: this.options.authorityHost,
-          managedIdentityClientId: this.options.managedIdentityClientId,
-        }),
-    })
-
-    this.providers.set(cacheKey, provider)
-    return provider
+    this.options = options
   }
 
   public async getToken(scopes: string | string[]): Promise<AccessToken> {
-    const normalizedScopes = resolveRequiredScopes(scopes)
-    const provider = this.getTokenProvider(normalizedScopes)
-    return provider.getToken()
+    const scope = resolveRequiredScopes(scopes)
+    const key = scope.join(' ')
+    let getToken = this.tokens.get(key)
+    if (getToken === undefined) {
+      getToken = cacheToken(
+        async () =>
+          await getDefaultAzureCredentialToken({
+            ...this.options,
+            scope: scope.length === 1 ? (scope[0] ?? scope) : scope,
+          }),
+      )
+      this.tokens.set(key, getToken)
+    }
+
+    return await getToken()
   }
 
   public async getAuthorizationHeader(
     scopes: string | string[] = storageOAuthScope,
   ): Promise<string> {
-    const normalizedScopes = resolveRequiredScopes(scopes)
-    const token = await this.getToken(normalizedScopes)
-    return `${token.tokenType ?? 'Bearer'} ${token.token}`
+    return formatAuthorizationHeader(await this.getToken(scopes))
   }
 }
