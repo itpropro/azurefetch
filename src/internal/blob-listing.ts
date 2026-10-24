@@ -63,22 +63,20 @@ export function listNames(
 
 /** Names with characters that XML cannot carry are percent-encoded and flagged with Encoded="true". */
 function decodeName(raw: string, encoded: boolean): string {
-  const name = raw
-    .trim()
-    .replaceAll(
-      xmlEntity,
-      (entity, hex: string | undefined, decimal: string | undefined, named: string | undefined) => {
-        if (hex !== undefined) {
-          return String.fromCodePoint(Number.parseInt(hex, 16))
-        }
+  const name = raw.replaceAll(
+    xmlEntity,
+    (entity, hex: string | undefined, decimal: string | undefined, named: string | undefined) => {
+      if (hex !== undefined) {
+        return String.fromCodePoint(Number.parseInt(hex, 16))
+      }
 
-        if (decimal !== undefined) {
-          return String.fromCodePoint(Number(decimal))
-        }
+      if (decimal !== undefined) {
+        return String.fromCodePoint(Number(decimal))
+      }
 
-        return namedEntities.get(named ?? '') ?? entity
-      },
-    )
+      return namedEntities.get(named ?? '') ?? entity
+    },
+  )
 
   return encoded ? decodeURIComponent(name) : name
 }

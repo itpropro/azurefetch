@@ -76,6 +76,15 @@ describe('Shared Key requests', () => {
       resource: '/myaccount/container\nrestype:container',
     },
     {
+      operation: 'request with repeated and mixed-case query parameters',
+      query: '?b=2&a=1&A=0',
+      send: async (container: ContainerClient) => await container.createIfNotExists(),
+      contentLength: null,
+      signedLines: ['PUT', '', '', '', '', ''],
+      signedHeaders: [],
+      resource: '/myaccount/container\na:0,1\nb:2\nrestype:container',
+    },
+    {
       operation: 'empty upload',
       send: async (container: ContainerClient) =>
         await container.getBlockBlobClient('a b.txt').upload(''),
@@ -95,7 +104,7 @@ describe('Shared Key requests', () => {
     },
   ])(
     'signs a $operation',
-    async ({ send, contentLength, signedLines, signedHeaders, resource }) => {
+    async ({ query = '', send, contentLength, signedLines, signedHeaders, resource }) => {
       vi.useFakeTimers({ now: new Date('2026-08-24T12:00:00Z'), toFake: ['Date'] })
       let headers = new Headers()
       const fetcher = createFetchMock([
@@ -105,7 +114,7 @@ describe('Shared Key requests', () => {
         },
       ])
       const credential = new StorageSharedKeyCredential('myaccount', accountKey)
-      const client = new BlobServiceClient(accountUrl, credential, { fetch: fetcher })
+      const client = new BlobServiceClient(`${accountUrl}/${query}`, credential, { fetch: fetcher })
 
       await send(client.getContainerClient('container'))
 
@@ -309,13 +318,14 @@ describe('ContainerClient.listBlobsFlat', () => {
     await expect(collect(pages)).resolves.toHaveLength(1)
   })
 
-  test('decodes XML entities and percent-encoded names', async () => {
+  test('decodes XML entities, percent-encoded names and keeps whitespace', async () => {
     const fetcher = createFetchMock([
       () =>
         textResponse(
           blobListing([
             '<Name>a &lt;b&gt; &amp;lt; &#233;&#x1F600;</Name>',
             '<Name Encoded="true">c%EF%BF%BE</Name>',
+            '<Name> spaced </Name>',
           ]),
         ),
     ])
@@ -324,7 +334,11 @@ describe('ContainerClient.listBlobsFlat', () => {
       anonymousClient(fetcher).getContainerClient('container').listBlobsFlat().byPage(),
     )
 
-    expect(page?.segment.blobItems.map(({ name }) => name)).toStrictEqual(['a <b> &lt; é😀', 'c￾'])
+    expect(page?.segment.blobItems.map(({ name }) => name)).toStrictEqual([
+      'a <b> &lt; é😀',
+      'c\uFFFE',
+      ' spaced ',
+    ])
   })
 })
 
@@ -398,5 +412,21 @@ describe('BlobBatchClient.deleteBlobs', () => {
     }
     expect(body.match(/authorization: Bearer batch-token/gu)).toHaveLength(2)
     expect(body.match(/x-ms-delete-snapshots: include/gu)).toHaveLength(2)
+  })
+
+  test.each([
+    { account: accountUrl, blob: 'https://other.blob.core.windows.net/container/a.txt' },
+    {
+      account: 'http://127.0.0.1:10000/devstoreaccount1',
+      blob: 'http://127.0.0.1:10000/devstoreaccount2/container/a.txt',
+    },
+  ])('rejects $blob before sending anything', async ({ account, blob }) => {
+    const fetcher = vi.fn<typeof fetch>()
+    const client = new BlobServiceClient(account, undefined, { fetch: fetcher })
+
+    await expect(client.getBlobBatchClient().deleteBlobs([blob])).rejects.toThrow(
+      'does not belong to',
+    )
+    expect(fetcher).not.toHaveBeenCalled()
   })
 })

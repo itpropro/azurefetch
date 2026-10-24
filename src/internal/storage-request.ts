@@ -225,12 +225,15 @@ function canonicalizeBlobResource(url: URL, accountName: string): string {
     values.set(key, [...(values.get(key) ?? []), value])
   }
 
-  return [
-    `/${accountName}${url.pathname}`,
-    ...[...values.keys()]
-      .toSorted()
-      .map((name) => `${name}:${values.get(name)?.toSorted().join(',')}`),
-  ].join('\n')
+  const names = [...values.keys()]
+  names.sort()
+  const parameters = names.map((name) => {
+    const sorted = values.get(name) ?? []
+    sorted.sort()
+    return `${name}:${sorted.join(',')}`
+  })
+
+  return [`/${accountName}${url.pathname}`, ...parameters].join('\n')
 }
 
 function nonEmpty(value: string | undefined): string | undefined {

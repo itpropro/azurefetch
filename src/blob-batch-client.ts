@@ -36,10 +36,20 @@ export class BlobBatchClient {
     blobUrls: string[],
     options: BlobDeleteOptions = {},
   ): Promise<BlobBatchSubmitResponse> {
+    const account = new URL(this.url)
+    const accountPath = account.pathname.endsWith('/') ? account.pathname : `${account.pathname}/`
+    const urls = blobUrls.map((blobUrl) => new URL(blobUrl))
+    // Sub-requests carry only the path, so a blob of another account would hit this one.
+    const foreign = urls.find(
+      (url) => url.origin !== account.origin || !url.pathname.startsWith(accountPath),
+    )
+    if (foreign !== undefined) {
+      throw new TypeError(`Blob ${foreign.toString()} does not belong to ${this.url}`)
+    }
+
     const boundary = multipartBoundary('batch')
     const parts = await Promise.all(
-      blobUrls.map(async (blobUrl, index) => {
-        const url = new URL(blobUrl)
+      urls.map(async (url, index) => {
         const headers = new Headers({ 'x-ms-date': new Date().toUTCString() })
         if (options.deleteSnapshots !== undefined) {
           headers.set('x-ms-delete-snapshots', options.deleteSnapshots)
