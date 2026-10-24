@@ -300,6 +300,18 @@ describe('TableClient', () => {
     ])
   })
 
+  test('returns the etag of each write, or undefined when the header is hidden', async () => {
+    const written = () => textResponse('', 204, 'No Content', { ETag: etag })
+    const fetcher = createFetchMock([written, written, written, () => textResponse('', 204)])
+    const table = anonymousTable(fetcher)
+    const entity = { partitionKey: 'pk', rowKey: 'rk' }
+
+    await expect(table.createEntity(entity)).resolves.toStrictEqual({ etag })
+    await expect(table.updateEntity(entity, 'Merge')).resolves.toStrictEqual({ etag })
+    await expect(table.upsertEntity(entity)).resolves.toStrictEqual({ etag })
+    await expect(table.upsertEntity(entity, 'Merge')).resolves.toStrictEqual({ etag: undefined })
+  })
+
   test('upserts with one unconditional PUT to the escaped entity path', async () => {
     const fetcher = createFetchMock([
       (url, init) => {
@@ -419,7 +431,7 @@ describe('TableClient', () => {
     const fetcher = createFetchMock([
       (url, init) => {
         request = { url, init }
-        return textResponse(transactionResponseBody([201, 204, 204, 204, 204]), 202)
+        return textResponse(transactionResponseBody([201, 204, 204, 204, 204, 204]), 202)
       },
     ])
 
@@ -433,6 +445,11 @@ describe('TableClient', () => {
       },
       { action: 'upsert', entity: { partitionKey: 'p', rowKey: 'r3', value: 'upserted' } },
       { action: 'delete', partitionKey: 'p', rowKey: 'r4' },
+      {
+        action: 'upsert',
+        entity: { partitionKey: 'p', rowKey: 'r6', value: 'merged' },
+        mode: 'Merge',
+      },
     ])
 
     expect(response).toStrictEqual({
@@ -443,13 +460,14 @@ describe('TableClient', () => {
         { status: 204 },
         { status: 204 },
         { status: 204 },
+        { status: 204 },
       ],
     })
     expect(request?.url).toBe(`${accountUrl}/$batch`)
     const operations = getBodyString(request?.init.body)
       .split('Content-Type: application/http')
       .slice(1)
-    expect(operations).toHaveLength(5)
+    expect(operations).toHaveLength(6)
     expect(operations[0]).toContain(`POST ${tableUrl} HTTP/1.1`)
     expect(operations[0]).toContain(
       '{"count":"1","count@odata.type":"Edm.Int64","PartitionKey":"p","RowKey":"r1"}',
@@ -462,6 +480,8 @@ describe('TableClient', () => {
     expect(operations[3]).not.toContain('If-Match')
     expect(operations[4]).toContain(`DELETE ${tableUrl}(PartitionKey='p',RowKey='r4') HTTP/1.1`)
     expect(operations[4]).toContain('If-Match: *')
+    expect(operations[5]).toContain(`PATCH ${tableUrl}(PartitionKey='p',RowKey='r6') HTTP/1.1`)
+    expect(operations[5]).not.toContain('If-Match')
   })
 
   test('rejects a transaction whose changeset failed', async () => {

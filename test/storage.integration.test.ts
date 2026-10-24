@@ -401,6 +401,25 @@ describe.runIf(env['AZUREFETCH_RUN_STORAGE_TESTS'] === '1' && configured)(
           ).resolves.toStrictEqual({ succeeded: true })
         })
 
+        test('writes return the etag that the next conditional write needs', async () => {
+          const key = { partitionKey, rowKey: 'write-etags' }
+
+          const created = await tableClient.createEntity({ ...key, value: 'created' })
+          const read = await tableClient.getEntity(partitionKey, 'write-etags')
+          const updated = await tableClient.updateEntity({ ...key, value: 'updated' }, 'Merge', {
+            etag: created.etag,
+          })
+          const upserted = await tableClient.upsertEntity({ ...key, value: 'upserted' })
+
+          expect(created.etag).toBe(read?.etag)
+          await expect(
+            tableClient.updateEntity({ ...key, value: 'stale' }, 'Merge', { etag: updated.etag }),
+          ).rejects.toMatchObject({ name: 'AzureRequestError', status: 412 })
+          await expect(
+            tableClient.deleteEntity(partitionKey, 'write-etags', { etag: upserted.etag }),
+          ).resolves.toStrictEqual({ succeeded: true })
+        })
+
         test('typed properties decode into their JavaScript types', async () => {
           const guid = '0f8fad5b-d9cb-469f-a165-70867728950e'
           await tableClient.createEntity({
@@ -593,10 +612,12 @@ describe.runIf(env['AZUREFETCH_RUN_STORAGE_TESTS'] === '1' && configured)(
               entity: { partitionKey, rowKey: 'row-merged', created, count: 1n, kept: 'kept' },
             },
             { action: 'create', entity: { partitionKey, rowKey: 'row-replaced', kept: 'kept' } },
+            { action: 'create', entity: { partitionKey, rowKey: 'row-upserted', kept: 'kept' } },
           ])
           rowsForCleanup.push(
             { partitionKey, rowKey: 'row-merged' },
             { partitionKey, rowKey: 'row-replaced' },
+            { partitionKey, rowKey: 'row-upserted' },
           )
 
           await tableClient.submitTransaction([
@@ -606,6 +627,11 @@ describe.runIf(env['AZUREFETCH_RUN_STORAGE_TESTS'] === '1' && configured)(
               mode: 'Merge',
             },
             { action: 'update', entity: { partitionKey, rowKey: 'row-replaced', count: 3n } },
+            {
+              action: 'upsert',
+              entity: { partitionKey, rowKey: 'row-upserted', count: 4n },
+              mode: 'Merge',
+            },
           ])
 
           await expect(tableClient.getEntity(partitionKey, 'row-merged')).resolves.toMatchObject({
@@ -616,6 +642,10 @@ describe.runIf(env['AZUREFETCH_RUN_STORAGE_TESTS'] === '1' && configured)(
           const replaced = await tableClient.getEntity(partitionKey, 'row-replaced')
           expect(replaced).toMatchObject({ count: 3n })
           expect(replaced).not.toHaveProperty('kept')
+          await expect(tableClient.getEntity(partitionKey, 'row-upserted')).resolves.toMatchObject({
+            count: 4n,
+            kept: 'kept',
+          })
         })
 
         test('submitTransaction deletes multiple rows', async () => {

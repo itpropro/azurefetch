@@ -28,6 +28,11 @@ export interface TableEtagOptions {
   etag?: string
 }
 
+export interface TableEntityWriteResponse {
+  /** The new etag; undefined when a browser's CORS rules don't expose the ETag header. */
+  etag?: string
+}
+
 export interface TableEntityQueryOptions {
   /** OData filter expression, for example built with `odata`. */
   filter?: string
@@ -36,8 +41,8 @@ export interface TableEntityQueryOptions {
 }
 
 export type TableTransactionAction =
-  | { action: 'create' | 'upsert'; entity: TableEntity }
-  | { action: 'update'; entity: TableEntity; mode?: TableUpdateMode }
+  | { action: 'create'; entity: TableEntity }
+  | { action: 'update' | 'upsert'; entity: TableEntity; mode?: TableUpdateMode }
   | { action: 'delete'; partitionKey: string; rowKey: string }
 
 export interface TableTransactionResponse {
@@ -97,7 +102,7 @@ export class TableClient {
   }
 
   /** Inserts the entity; an existing entity with the same keys fails with 409. */
-  public async createEntity(entity: TableEntity): Promise<void> {
+  public async createEntity(entity: TableEntity): Promise<TableEntityWriteResponse> {
     const response = await this.transport.send('POST', this.url, {
       headers: { 'Content-Type': 'application/json', Prefer: 'return-no-content' },
       body: serializeEntity(entity),
@@ -105,6 +110,8 @@ export class TableClient {
     if (!response.ok) {
       throw storageRequestError('Create entity', response)
     }
+
+    return writeResponse(response)
   }
 
   /** Updates an existing entity; a missing entity fails with 404. */
@@ -112,13 +119,16 @@ export class TableClient {
     entity: TableEntity,
     mode: TableUpdateMode,
     options: TableEtagOptions = {},
-  ): Promise<void> {
-    await this.writeEntity('Update entity', entity, mode, options.etag ?? '*')
+  ): Promise<TableEntityWriteResponse> {
+    return await this.writeEntity('Update entity', entity, mode, options.etag ?? '*')
   }
 
   /** Inserts the entity or updates an existing one with the same keys, replacing it by default. */
-  public async upsertEntity(entity: TableEntity, mode: TableUpdateMode = 'Replace'): Promise<void> {
-    await this.writeEntity('Upsert entity', entity, mode)
+  public async upsertEntity(
+    entity: TableEntity,
+    mode: TableUpdateMode = 'Replace',
+  ): Promise<TableEntityWriteResponse> {
+    return await this.writeEntity('Upsert entity', entity, mode)
   }
 
   public async deleteEntity(
@@ -246,7 +256,7 @@ export class TableClient {
     entity: TableEntity,
     mode: TableUpdateMode,
     ifMatch?: string,
-  ): Promise<void> {
+  ): Promise<TableEntityWriteResponse> {
     const response = await this.transport.send(
       updateMethods[mode],
       this.entityUrl(entity.partitionKey, entity.rowKey),
@@ -261,11 +271,17 @@ export class TableClient {
     if (!response.ok) {
       throw storageRequestError(operation, response)
     }
+
+    return writeResponse(response)
   }
 
   private entityUrl(partitionKey: string, rowKey: string): string {
     return extendUrlPath(this.url, entityPath(partitionKey, rowKey))
   }
+}
+
+function writeResponse(response: Response): TableEntityWriteResponse {
+  return { etag: response.headers.get('ETag') ?? undefined }
 }
 
 function entityPath(partitionKey: string, rowKey: string): string {
@@ -290,11 +306,10 @@ function transactionRequest(
     return { method: 'POST', url: tableUrl, body, ifMatch: false }
   }
 
-  const update = action.action === 'update'
   return {
-    method: update ? updateMethods[action.mode ?? 'Replace'] : 'PUT',
+    method: updateMethods[action.mode ?? 'Replace'],
     url: extendUrlPath(tableUrl, entityPath(entity.partitionKey, entity.rowKey)),
     body,
-    ifMatch: update,
+    ifMatch: action.action === 'update',
   }
 }

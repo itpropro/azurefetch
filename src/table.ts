@@ -11,6 +11,7 @@ export { TableClient } from './table-client'
 export type {
   TableEntityQueryOptions,
   TableEntityResponse,
+  TableEntityWriteResponse,
   TableEtagOptions,
   TableTransactionAction,
   TableTransactionResponse,
