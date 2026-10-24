@@ -64,6 +64,20 @@ function useAppServiceEnvironment(): void {
   vi.stubEnv('IDENTITY_HEADER', 'identity-header')
 }
 
+/** Mirrors what the AKS workload identity webhook injects, next to a managed identity endpoint. */
+async function useWorkloadIdentityEnvironment(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'azurefetch-workload-'))
+  commandDirectories.push(directory)
+  const tokenFile = join(directory, 'azure-identity-token')
+  await writeFile(tokenFile, 'federated-assertion\n')
+
+  vi.stubEnv('AZURE_TENANT_ID', 'pod-tenant')
+  vi.stubEnv('AZURE_CLIENT_ID', 'workload-client')
+  vi.stubEnv('AZURE_FEDERATED_TOKEN_FILE', tokenFile)
+  useAppServiceEnvironment()
+  return tokenFile
+}
+
 beforeEach(() => {
   clearCredentialEnvironment()
 })
@@ -122,6 +136,54 @@ describe('getDefaultAzureCredentialToken', () => {
     expect(token.token).toBe('mi-token')
   })
 
+  test('exchanges the workload identity token before trying managed identity', async () => {
+    await useWorkloadIdentityEnvironment()
+    const fetchMock = createFetchMock([
+      (url, init) => {
+        expect(url).toBe('https://login.microsoftonline.com/override-tenant/oauth2/v2.0/token')
+        expect(Object.fromEntries(new URLSearchParams(getBodyString(init.body)))).toStrictEqual({
+          client_id: 'workload-client',
+          client_assertion: 'federated-assertion',
+          client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+          grant_type: 'client_credentials',
+          scope,
+        })
+        return jsonResponse({ access_token: 'workload-token', expires_in: 3600 })
+      },
+    ])
+
+    const token = await getDefaultAzureCredentialToken({
+      scope,
+      tenantId: 'override-tenant',
+      fetch: fetchMock,
+    })
+
+    expect(token.token).toBe('workload-token')
+  })
+
+  test('does not fall back to managed identity when the workload token file is missing', async () => {
+    await rm(await useWorkloadIdentityEnvironment())
+    const fetchMock = vi.fn<typeof fetch>()
+
+    await expect(getDefaultAzureCredentialToken({ scope, fetch: fetchMock })).rejects.toMatchObject(
+      { code: 'ENOENT' },
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test('rejects a tenant ID that the shell or PowerShell would interpret', async () => {
+    const calls = await installCommands({ az: printToken('cli-token') })
+
+    await expect(
+      getDefaultAzureCredentialToken({
+        scope,
+        tenantId: "tenant'&calc",
+        fetch: vi.fn<typeof fetch>(),
+      }),
+    ).rejects.toBeInstanceOf(TypeError)
+    await expect(calls()).resolves.toStrictEqual([])
+  })
+
   test('falls back to Azure CLI when managed identity is unavailable', async () => {
     const calls = await installCommands({ az: printToken('cli-token') })
 
@@ -157,6 +219,25 @@ describe('DefaultAzureCredential', () => {
     })
 
     await expect(credential.getToken(scope)).resolves.toMatchObject({ token: 'mi-token' })
+  })
+
+  test('scopes Azure CLI and Azure PowerShell to the requested tenant', async () => {
+    const calls = await installCommands({ az: 'exit 1', pwsh: printToken('ps-token') })
+    const credential = new DefaultAzureCredential({
+      tenantId: 'contoso.onmicrosoft.com',
+      fetch: createFetchMock([imdsUnavailable]),
+    })
+
+    await expect(credential.getToken('https://resource/.default')).resolves.toMatchObject({
+      token: 'ps-token',
+    })
+    const [cliCall, powerShellCall] = await calls()
+    expect(cliCall).toBe(
+      'az account get-access-token --output json --scope https://resource/.default --tenant contoso.onmicrosoft.com',
+    )
+    expect(powerShellCall).toContain(
+      "Get-AzAccessToken -ResourceUrl 'https://resource' -TenantId 'contoso.onmicrosoft.com'",
+    )
   })
 
   test('caches tokens separately per scope', async () => {

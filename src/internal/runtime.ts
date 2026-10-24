@@ -1,4 +1,5 @@
 import type * as ChildProcess from 'node:child_process'
+import type * as FsPromises from 'node:fs/promises'
 
 interface RuntimeGlobals {
   process?: {
@@ -12,6 +13,7 @@ const runtime: RuntimeGlobals = globalThis
 
 // Built at runtime so edge bundlers don't try to resolve the Node builtin.
 const childProcessModule = ['node', ['child', 'process'].join('_')].join(':')
+const fsPromisesModule = ['node', ['fs', 'promises'].join('/')].join(':')
 
 /** Uses the global `fetch` at call time, bound to the global object as browsers and workers require. */
 export const defaultFetch: typeof globalThis.fetch = async (input, init) =>
@@ -65,6 +67,19 @@ export async function executeCommand(
   }
 
   return result.stdout
+}
+
+export async function readTextFile(path: string): Promise<string> {
+  const fs: unknown = await import(fsPromisesModule)
+  if (!isFsPromisesModule(fs)) {
+    throw new Error('File system access is unavailable')
+  }
+
+  return await fs.readFile(path, 'utf8')
+}
+
+function isFsPromisesModule(value: unknown): value is typeof FsPromises {
+  return typeof value === 'object' && value !== null && 'readFile' in value
 }
 
 function isChildProcessModule(value: unknown): value is typeof ChildProcess {

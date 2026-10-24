@@ -15,6 +15,8 @@ export {
 export type { DeveloperAzureCredentialOptions } from './default-credential'
 export { DefaultAzureCredential } from './default-azure-credential'
 export type { DefaultAzureCredentialOptions } from './default-azure-credential'
+export { ClientSecretCredential } from './client-secret-credential'
+export type { ClientSecretCredentialOptions } from './client-secret-credential'
 export { AzureFetchError } from './errors'
 export { TokenRequestError } from './token-request-error'
 export { TokenUnavailableError } from './token-unavailable-error'
