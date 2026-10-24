@@ -13,7 +13,13 @@ export async function fetchJson(
   const response = await fetcher(input, init)
   if (response.ok) {
     // Body failures such as cancellation or a reset connection must reach the caller.
-    return await response.json()
+    const body = await response.text()
+    try {
+      return JSON.parse(body)
+    } catch {
+      // The parser error can quote the body, which may contain a token.
+      throw new TokenRequestError('Token response is not valid JSON')
+    }
   }
 
   const payload = await readErrorBody(response)

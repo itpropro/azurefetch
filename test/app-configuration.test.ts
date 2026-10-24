@@ -67,6 +67,7 @@ describe('AppConfigurationClient', () => {
       (_url, init) => {
         const headers = new Headers(init.headers)
         expect(getBodyString(init.body)).toBe(body)
+        expect(headers.get('x-ms-date')).toBe('Mon, 16 Mar 2026 12:00:00 GMT')
         expect(headers.get('x-ms-content-sha256')).toBe(contentHash)
         expect(headers.get('Authorization')).toBe(
           `HMAC-SHA256 Credential=test-id&SignedHeaders=x-ms-date;host;x-ms-content-sha256&Signature=${signature}`,
@@ -153,15 +154,18 @@ describe('AppConfigurationClient', () => {
     await expect(client.setConfigurationSetting(key, value)).resolves.toMatchObject({ key, value })
   })
 
-  test('deleteConfigurationSetting returns undefined on a 204 response', async () => {
+  test('deleteConfigurationSetting uses the API version override and maps 204', async () => {
     const fetcher = createFetchMock([
       (url, init) => {
-        expect(url).toBe(`${endpoint}/kv/plain?api-version=2023-11-01`)
+        expect(url).toBe(`${endpoint}/kv/plain?api-version=2024-09-01`)
         expect(init.method).toBe('DELETE')
         return new Response(null, { status: 204 })
       },
     ])
-    const client = new AppConfigurationClient(endpoint, bearer, { fetch: fetcher })
+    const client = new AppConfigurationClient(endpoint, bearer, {
+      fetch: fetcher,
+      apiVersion: '2024-09-01',
+    })
 
     await expect(client.deleteConfigurationSetting('plain')).resolves.toBeUndefined()
   })
@@ -191,6 +195,22 @@ describe('AppConfigurationClient', () => {
     const settings = await collect(client.listConfigurationSettings())
 
     expect(settings.map(({ key }) => key)).toStrictEqual(['one', 'two'])
+  })
+
+  test('resumes listing from an explicit continuation token', async () => {
+    const fetcher = createFetchMock([
+      (url) => {
+        expect(new URL(url).searchParams.get('after')).toBe('next-token')
+        return settingsPage({ items: [{ key: 'two', value: '2' }] })
+      },
+    ])
+    const client = new AppConfigurationClient(endpoint, bearer, { fetch: fetcher })
+
+    const pages = await collect(
+      client.listConfigurationSettings().byPage({ continuationToken: 'next-token' }),
+    )
+
+    expect(pages).toMatchObject([{ value: [{ key: 'two' }], continuationToken: undefined }])
   })
 
   test('escapes reserved characters in generated key and label filters', async () => {

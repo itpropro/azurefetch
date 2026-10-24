@@ -1,7 +1,9 @@
+import { inspect } from 'node:util'
+
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { getServicePrincipalToken } from '../src/service-principal'
-import { createFetchMock, getBodyString, jsonResponse } from './helpers'
+import { createFetchMock, getBodyString, jsonResponse, textResponse } from './helpers'
 
 const options = {
   tenantId: 'tenant',
@@ -39,6 +41,14 @@ describe('getServicePrincipalToken', () => {
     await expect(
       getServicePrincipalToken({ ...options, abortSignal: controller.signal, fetch: fetcher }),
     ).rejects.toBe(reason)
+  })
+
+  test('does not expose a malformed token response in the error', async () => {
+    const fetcher = createFetchMock([() => textResponse('leaked-token')])
+
+    await expect(getServicePrincipalToken({ ...options, fetch: fetcher })).rejects.toSatisfy(
+      (error) => error instanceof Error && !inspect(error).includes('leaked-token'),
+    )
   })
 
   test('reads the refresh hint from refresh_in', async () => {

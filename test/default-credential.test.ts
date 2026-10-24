@@ -14,6 +14,7 @@ import { TokenRequestError } from '../src/token-request-error'
 import { TokenUnavailableError } from '../src/token-unavailable-error'
 import { clearCredentialEnvironment, createFetchMock, getBodyString, jsonResponse } from './helpers'
 
+// The fake executables are POSIX shell scripts; Windows behavior is not covered by this suite.
 const scope = 'scope/.default'
 const printToken = (token: string) =>
   `printf '%s' '{"accessToken":"${token}","expires_on":1700000000}'`

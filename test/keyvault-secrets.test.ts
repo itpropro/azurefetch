@@ -132,6 +132,24 @@ describe('KeyVaultSecretClient', () => {
     await expect(call(createClient(fetcher))).resolves.toMatchObject({ name: 'app-secret' })
   })
 
+  test('keeps the path of a vault URL behind a proxy', async () => {
+    const fetcher = createFetchMock([
+      (url) => {
+        expect(new URL(url).pathname).toBe('/secrets/vault/deletedsecrets/app-secret')
+        return jsonResponse({ id: secretId, attributes: {} })
+      },
+    ])
+    const client = new KeyVaultSecretClient(
+      'https://proxy.example/secrets/vault',
+      { getAuthorizationHeader: async () => 'Bearer token' },
+      { fetch: fetcher },
+    )
+
+    await expect(client.getDeletedSecret('app-secret')).resolves.toMatchObject({
+      name: 'app-secret',
+    })
+  })
+
   test('purgeDeletedSecret deletes the deleted secret', async () => {
     const fetcher = createFetchMock([
       (url, init) => {

@@ -211,17 +211,17 @@ export class KeyVaultSecretClient {
     )
   }
 
-  private secretUrl(name: string, version?: string): string {
+  private secretUrl(name: string, version?: string, collection = 'secrets'): string {
     if (name.trim().length === 0) {
       throw new TypeError('Secret name must be a non-empty string')
     }
 
-    const url = `${this.url}/secrets/${encodeURIComponent(name)}`
+    const url = `${this.url}/${collection}/${encodeURIComponent(name)}`
     return version === undefined ? url : `${url}/${encodeURIComponent(version)}`
   }
 
   private deletedSecretUrl(name: string): string {
-    return this.secretUrl(name).replace('/secrets/', '/deletedsecrets/')
+    return this.secretUrl(name, undefined, 'deletedsecrets')
   }
 
   /** Continuation links come from the service; they must stay on the configured vault. */
