@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.6.0](https://github.com/itpropro/azurefetch/compare/v0.5.0...v0.6.0) (2026-10-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **core:** cover the data-tables entity operations in TableClient ([#55](https://github.com/itpropro/azurefetch/issues/55))
+* **core:** entity property values extend beyond JSON primitives, and typed service properties decode into Date, bigint, Uint8Array and { value, type: 'Guid' }. Reads return TableEntityResult instead of TableEntity: it carries etag and timestamp, and a projection may omit its keys and timestamp. TableEntityResponse, TableGetEntityResponse and TableEntityPage use it. Table requests ask for odata=minimalmetadata, and entity reads reject responses without odata.etag.
+
+### Features
+
+* **core:** close the remaining Azure Identity gaps ([#54](https://github.com/itpropro/azurefetch/issues/54)) ([fea1041](https://github.com/itpropro/azurefetch/commit/fea1041b328681f79be266960e43f4ad6a3bdeb9))
+* **core:** cover the data-tables entity operations in TableClient ([b75fc53](https://github.com/itpropro/azurefetch/commit/b75fc534ed72223fe2536675e517a480e2603130)), closes [#53](https://github.com/itpropro/azurefetch/issues/53)
+* **core:** cover the data-tables entity operations in TableClient ([#55](https://github.com/itpropro/azurefetch/issues/55)) ([3968c21](https://github.com/itpropro/azurefetch/commit/3968c2127d99b081fd050956d604332eeaefa20d))
+* **core:** honor getToken options in credentials ([ed7d1ad](https://github.com/itpropro/azurefetch/commit/ed7d1ada4a27c9c193b56199aedac228937677cc)), closes [#50](https://github.com/itpropro/azurefetch/issues/50)
+* **core:** read certificate and password sources in the default chain ([7173627](https://github.com/itpropro/azurefetch/commit/7173627b695f1e834a444caf279c9100a977d9c6)), closes [#52](https://github.com/itpropro/azurefetch/issues/52)
+* **core:** retry transient failures with backoff and wait hints ([769d651](https://github.com/itpropro/azurefetch/commit/769d651fe30a8641168bc8800f2a9c6e19d81522)), closes [#51](https://github.com/itpropro/azurefetch/issues/51)
+* **core:** return entity etags from writes and merge upserts ([4f8ce72](https://github.com/itpropro/azurefetch/commit/4f8ce721aea2e7da9f77d3ccce8d47b505566004))
+* **core:** return entity etags from writes and merge upserts ([#58](https://github.com/itpropro/azurefetch/issues/58)) ([b9015c2](https://github.com/itpropro/azurefetch/commit/b9015c28a1bfde5d40956f4ffb3151fe0e43008c))
+* **core:** sign client certificate assertions with Web Crypto ([64319f2](https://github.com/itpropro/azurefetch/commit/64319f217e28b73fa03f48243c8080ad64a4e05d)), closes [#52](https://github.com/itpropro/azurefetch/issues/52)
+
+
+### Bug Fixes
+
+* **core:** keep a property named __proto__ in table entities ([891ad6a](https://github.com/itpropro/azurefetch/commit/891ad6ad3fa7c787b4ac4904ee238de955a626bf)), closes [#53](https://github.com/itpropro/azurefetch/issues/53)
+* **core:** keep a valid cached token when its refresh fails ([b0e0982](https://github.com/itpropro/azurefetch/commit/b0e098202192b949edda80c3b689f5f2283c6f6a)), closes [#49](https://github.com/itpropro/azurefetch/issues/49)
+* **core:** key default credential tokens by the effective tenant ([208e6d5](https://github.com/itpropro/azurefetch/commit/208e6d5b732841d03ac66cb8561ab9426759165d)), closes [#50](https://github.com/itpropro/azurefetch/issues/50)
+* **core:** name the claims call's tenant in re-login commands ([bb2835d](https://github.com/itpropro/azurefetch/commit/bb2835d96624253b2c5a8cf58d969b05498da96f)), closes [#50](https://github.com/itpropro/azurefetch/issues/50)
+* **core:** stop retries for cancellation and unbuildable requests ([9f31dd6](https://github.com/itpropro/azurefetch/commit/9f31dd6aac9539be80e3eb37ef55f6a07cfece33)), closes [#51](https://github.com/itpropro/azurefetch/issues/51)
+
 ## [0.5.0](https://github.com/itpropro/azurefetch/compare/v0.4.0...v0.5.0) (2026-10-24)
 
 
