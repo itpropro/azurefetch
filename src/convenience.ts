@@ -4,6 +4,11 @@ import type { ListOptions } from './internal/paging'
 import type { StorageClientOptions } from './internal/storage-request'
 import type { TableEntity, TableEntityResult } from './internal/table-entity'
 import { TableClient } from './table-client'
+import type {
+  TableEntityQueryOptions,
+  TableEntityWriteResponse,
+  TableUpdateMode,
+} from './table-client'
 
 export interface BlobUploadTextOptions {
   /** Defaults to `text/plain; charset=utf-8`. */
@@ -78,17 +83,19 @@ export async function upsertEntity(
   client: AzureClient,
   tableUrl: string,
   entity: TableEntity,
-): Promise<void> {
-  await new TableClient(tableUrl, undefined, through(client)).upsertEntity(entity)
+  mode?: TableUpdateMode,
+): Promise<TableEntityWriteResponse> {
+  return await new TableClient(tableUrl, undefined, through(client)).upsertEntity(entity, mode)
 }
 
 export async function* listEntitiesPage(
   client: AzureClient,
   tableUrl: string,
-  options?: ListOptions,
+  { filter, select, ...pageOptions }: ListOptions & TableEntityQueryOptions = {},
 ): AsyncGenerator<TableEntityPage> {
   const table = new TableClient(tableUrl, undefined, through(client))
-  for await (const { value, continuationToken } of table.listEntities().byPage(options)) {
+  const pages = table.listEntities({ filter, select }).byPage(pageOptions)
+  for await (const { value, continuationToken } of pages) {
     yield { entities: value, continuationToken }
   }
 }

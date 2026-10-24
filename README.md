@@ -241,16 +241,18 @@ const accountSasUrl = await blobServiceWithSharedKey.generateAccountSasUrl(
 )
 ```
 
-Table reads return the entity's `etag` and its `timestamp` string. `Date`, `bigint` and `Uint8Array` values are written as `Edm.DateTime`, `Edm.Int64` and `Edm.Binary`; any EDM type can also be set explicitly as `{ value, type }`. Reads decode those three types back and return Guids as `{ value, type: 'Guid' }`. `updateEntity` and `deleteEntity` send the etag as `If-Match` and fail with 412 when it is stale; without one they match any version. `upsertEntity` replaces by default.
+Table reads return the entity's `etag` and its `timestamp` string. `Date`, `bigint` and `Uint8Array` values are written as `Edm.DateTime`, `Edm.Int64` and `Edm.Binary`; any EDM type can also be set explicitly as `{ value, type }`. Reads decode those three types back and return Guids as `{ value, type: 'Guid' }`. Writes return the new `etag`. `updateEntity` and `deleteEntity` send an etag as `If-Match` and fail with 412 when it is stale; without one they match any version. `upsertEntity` and transaction upserts replace by default and merge with `'Merge'`.
 
 ```ts
 import { odata } from 'azurefetch'
 
-await table.createEntity({ partitionKey: 'pk', rowKey: 'rk', createdOn: new Date(), size: 1n })
-const entity = await table.getEntity('pk', 'rk')
-await table.updateEntity({ partitionKey: 'pk', rowKey: 'rk', size: 2n }, 'Merge', {
-  etag: entity?.etag,
+const { etag } = await table.createEntity({
+  partitionKey: 'pk',
+  rowKey: 'rk',
+  createdOn: new Date(),
+  size: 1n,
 })
+await table.updateEntity({ partitionKey: 'pk', rowKey: 'rk', size: 2n }, 'Merge', { etag })
 
 const query = { filter: odata`PartitionKey eq ${'pk'}`, select: ['rowKey', 'size'] }
 for await (const page of table.listEntities(query).byPage()) {

@@ -107,6 +107,43 @@ describe('table helpers', () => {
     expect(fetcher).toHaveBeenCalledTimes(1)
   })
 
+  test('upsertEntity merges with PATCH and returns the etag', async () => {
+    const fetcher = createFetchMock([
+      (_url, init) => {
+        expect(init.method).toBe('PATCH')
+        return textResponse('', 204, 'No Content', { ETag: etag })
+      },
+    ])
+
+    await expect(
+      upsertEntity(bearerClient(fetcher), tableUrl, { partitionKey: 'pk', rowKey: 'rk' }, 'Merge'),
+    ).resolves.toStrictEqual({ etag })
+  })
+
+  test('listEntitiesPage filters and projects every page', async () => {
+    const fetcher = createFetchMock([
+      (url) => {
+        const query = new URL(url).searchParams
+        expect(query.get('$filter')).toBe("PartitionKey eq 'pk'")
+        expect(query.get('$select')).toBe('RowKey,n')
+        expect(query.get('$top')).toBe('1')
+        return jsonResponse({ value: [{ 'odata.etag': etag, RowKey: 'rk', n: 1 }] })
+      },
+    ])
+
+    const pages = await collect(
+      listEntitiesPage(bearerClient(fetcher), tableUrl, {
+        filter: "PartitionKey eq 'pk'",
+        select: ['rowKey', 'n'],
+        maxPageSize: 1,
+      }),
+    )
+
+    expect(pages).toStrictEqual([
+      { entities: [{ rowKey: 'rk', n: 1, etag }], continuationToken: undefined },
+    ])
+  })
+
   test('listEntitiesPage yields entity pages', async () => {
     const fetcher = createFetchMock([
       () => jsonResponse({ value: [{ 'odata.etag': etag, PartitionKey: 'pk', RowKey: 'rk' }] }),
