@@ -1,32 +1,33 @@
-import { createTokenProvider } from "./provider";
-import { getDefaultAzureCredentialToken } from "./default-credential";
-import type { AccessToken, TokenProvider } from "./types";
-import { resolveRequiredScopes, storageOAuthScope } from "./internal/request-core";
-import { sanitizeAuthorityHost } from "./internal/url";
+import { getDefaultAzureCredentialToken } from './default-credential'
+import { resolveRequiredScopes, storageOAuthScope } from './internal/request-core'
+import { sanitizeAuthorityHost } from './internal/url'
+import { createTokenProvider } from './provider'
+import type { AccessToken, TokenProvider } from './types'
 
 export interface DefaultAzureCredentialOptions {
-  authorityHost?: string;
-  managedIdentityClientId?: string;
-  fetch?: typeof globalThis.fetch;
+  authorityHost?: string
+  managedIdentityClientId?: string
+  fetch?: typeof globalThis.fetch
 }
 
 export class DefaultAzureCredential {
-  private readonly providers = new Map<string, TokenProvider>();
+  private readonly providers = new Map<string, TokenProvider>()
 
-  private readonly options: DefaultAzureCredentialOptions;
+  private readonly options: DefaultAzureCredentialOptions
 
   constructor(options: DefaultAzureCredentialOptions = {}) {
     this.options = {
       ...options,
-      authorityHost: options.authorityHost == null ? undefined : sanitizeAuthorityHost(options.authorityHost),
-    };
+      authorityHost:
+        options.authorityHost == null ? undefined : sanitizeAuthorityHost(options.authorityHost),
+    }
   }
 
   private getTokenProvider(scopes: string[]): TokenProvider {
-    const cacheKey = JSON.stringify(scopes);
-    const existingProvider = this.providers.get(cacheKey);
+    const cacheKey = JSON.stringify(scopes)
+    const existingProvider = this.providers.get(cacheKey)
     if (existingProvider != null) {
-      return existingProvider;
+      return existingProvider
     }
 
     const provider = createTokenProvider({
@@ -37,21 +38,23 @@ export class DefaultAzureCredential {
           authorityHost: this.options.authorityHost,
           managedIdentityClientId: this.options.managedIdentityClientId,
         }),
-    });
+    })
 
-    this.providers.set(cacheKey, provider);
-    return provider;
+    this.providers.set(cacheKey, provider)
+    return provider
   }
 
   public async getToken(scopes: string | string[]): Promise<AccessToken> {
-    const normalizedScopes = resolveRequiredScopes(scopes);
-    const provider = this.getTokenProvider(normalizedScopes);
-    return provider.getToken();
+    const normalizedScopes = resolveRequiredScopes(scopes)
+    const provider = this.getTokenProvider(normalizedScopes)
+    return provider.getToken()
   }
 
-  public async getAuthorizationHeader(scopes: string | string[] = storageOAuthScope): Promise<string> {
-    const normalizedScopes = resolveRequiredScopes(scopes);
-    const token = await this.getToken(normalizedScopes);
-    return `${token.tokenType ?? "Bearer"} ${token.token}`;
+  public async getAuthorizationHeader(
+    scopes: string | string[] = storageOAuthScope,
+  ): Promise<string> {
+    const normalizedScopes = resolveRequiredScopes(scopes)
+    const token = await this.getToken(normalizedScopes)
+    return `${token.tokenType ?? 'Bearer'} ${token.token}`
   }
 }

@@ -1,10 +1,12 @@
 export interface FormValue {
-  key: string;
-  value: string;
+  key: string
+  value: string
 }
 
 export function toFormUrlEncoded(values: FormValue[]): string {
-  return values.map(({ key, value }) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join("&");
+  return values
+    .map(({ key, value }) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&')
 }
 
 export function toFormEntries(record: Record<string, string | undefined>): FormValue[] {
@@ -13,5 +15,5 @@ export function toFormEntries(record: Record<string, string | undefined>): FormV
     .map(([key, value]) => ({
       key,
       value,
-    }));
+    }))
 }

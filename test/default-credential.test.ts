@@ -1,390 +1,416 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
-vi.mock("../src/internal/process", () => ({
+vi.mock('../src/internal/process', () => ({
   hasCommandExecution: vi.fn(),
   isCommandUnavailable: vi.fn(),
   executeCommand: vi.fn(),
-}));
+}))
 
-import { getDefaultAzureCredentialToken, getDeveloperAzureCredentialToken } from "../src/default-credential";
-import { DefaultAzureCredential } from "../src/default-azure-credential";
-import { TokenRequestError, TokenUnavailableError } from "../src/errors";
-import { executeCommand, hasCommandExecution, isCommandUnavailable } from "../src/internal/process";
-import { createFetchMock, jsonResponse, captureEnv, restoreEnv, unavailableCommandError } from "./helpers";
+import { DefaultAzureCredential } from '../src/default-azure-credential'
+import {
+  getDefaultAzureCredentialToken,
+  getDeveloperAzureCredentialToken,
+} from '../src/default-credential'
+import { TokenRequestError, TokenUnavailableError } from '../src/errors'
+import { executeCommand, hasCommandExecution, isCommandUnavailable } from '../src/internal/process'
+import {
+  createFetchMock,
+  jsonResponse,
+  captureEnv,
+  restoreEnv,
+  unavailableCommandError,
+} from './helpers'
 
-const mockExecuteCommand = vi.mocked(executeCommand);
-const mockHasCommandExecution = vi.mocked(hasCommandExecution);
-const mockIsCommandUnavailable = vi.mocked(isCommandUnavailable);
+const mockExecuteCommand = vi.mocked(executeCommand)
+const mockHasCommandExecution = vi.mocked(hasCommandExecution)
+const mockIsCommandUnavailable = vi.mocked(isCommandUnavailable)
 
-describe("getDefaultAzureCredentialToken", () => {
-  let originalEnv: NodeJS.ProcessEnv;
+describe('getDefaultAzureCredentialToken', () => {
+  let originalEnv: NodeJS.ProcessEnv
 
   beforeEach(() => {
-    originalEnv = captureEnv();
+    originalEnv = captureEnv()
 
-    vi.clearAllMocks();
-    mockHasCommandExecution.mockReturnValue(true);
-    mockIsCommandUnavailable.mockImplementation((error) => (error as NodeJS.ErrnoException)?.code === "ENOENT");
-  });
+    vi.clearAllMocks()
+    mockHasCommandExecution.mockReturnValue(true)
+    mockIsCommandUnavailable.mockImplementation(
+      (error) => (error as NodeJS.ErrnoException)?.code === 'ENOENT',
+    )
+  })
 
   afterEach(() => {
-    restoreEnv(originalEnv);
-  });
+    restoreEnv(originalEnv)
+  })
 
-  test("rejects an HTTP authority before trying the credential chain", async () => {
-    const fetchMock = vi.fn<typeof fetch>();
+  test('rejects an HTTP authority before trying the credential chain', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
 
     await expect(
       getDefaultAzureCredentialToken({
-        scope: "scope/.default",
-        authorityHost: "http://identity.test",
+        scope: 'scope/.default',
+        authorityHost: 'http://identity.test',
         fetch: fetchMock,
       }),
-    ).rejects.toThrow("authorityHost must use HTTPS");
+    ).rejects.toThrow('authorityHost must use HTTPS')
 
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(mockExecuteCommand).not.toHaveBeenCalled();
-  });
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(mockExecuteCommand).not.toHaveBeenCalled()
+  })
 
-  test("uses service principal first", async () => {
-    process.env.AZURE_TENANT_ID = "tenant";
-    process.env.AZURE_CLIENT_ID = "client";
-    process.env.AZURE_CLIENT_SECRET = "secret";
-    process.env.IDENTITY_ENDPOINT = "https://appservice.azurewebsites.net/identity";
-    process.env.IDENTITY_HEADER = "my-id-token";
+  test('uses service principal first', async () => {
+    process.env.AZURE_TENANT_ID = 'tenant'
+    process.env.AZURE_CLIENT_ID = 'client'
+    process.env.AZURE_CLIENT_SECRET = 'secret'
+    process.env.IDENTITY_ENDPOINT = 'https://appservice.azurewebsites.net/identity'
+    process.env.IDENTITY_HEADER = 'my-id-token'
 
     const fetchMock = createFetchMock([
       (url) => {
-        expect(url).toBe("https://identity.test/tenant/oauth2/v2.0/token");
+        expect(url).toBe('https://identity.test/tenant/oauth2/v2.0/token')
         return jsonResponse({
-          access_token: "sp-token",
+          access_token: 'sp-token',
           expires_in: 3600,
-        });
+        })
       },
-    ]);
+    ])
 
     const token = await getDefaultAzureCredentialToken({
-      scope: "scope/.default",
-      authorityHost: "https://identity.test",
+      scope: 'scope/.default',
+      authorityHost: 'https://identity.test',
       fetch: fetchMock,
-    });
+    })
 
-    expect(token.token).toBe("sp-token");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(mockExecuteCommand).not.toHaveBeenCalled();
-  });
+    expect(token.token).toBe('sp-token')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(mockExecuteCommand).not.toHaveBeenCalled()
+  })
 
-  test("falls back to managed identity when service principal unavailable", async () => {
-    process.env.IDENTITY_ENDPOINT = "https://appservice.azurewebsites.net/identity";
-    process.env.IDENTITY_HEADER = "my-id-token";
+  test('falls back to managed identity when service principal unavailable', async () => {
+    process.env.IDENTITY_ENDPOINT = 'https://appservice.azurewebsites.net/identity'
+    process.env.IDENTITY_HEADER = 'my-id-token'
 
     const fetchMock = createFetchMock([
       (url, init) => {
-        expect(new URL(url).searchParams.get("resource")).toBe("scope");
+        expect(new URL(url).searchParams.get('resource')).toBe('scope')
         expect(init.headers).toMatchObject({
-          Metadata: "true",
-          "X-IDENTITY-HEADER": "my-id-token",
-        });
+          Metadata: 'true',
+          'X-IDENTITY-HEADER': 'my-id-token',
+        })
 
         return jsonResponse({
-          access_token: "mi-token",
+          access_token: 'mi-token',
           expires_in: 3600,
-        });
+        })
       },
-    ]);
+    ])
 
     const token = await getDefaultAzureCredentialToken({
-      scope: "scope/.default",
+      scope: 'scope/.default',
       fetch: fetchMock,
-    });
+    })
 
-    expect(token.token).toBe("mi-token");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(mockExecuteCommand).not.toHaveBeenCalled();
-  });
+    expect(token.token).toBe('mi-token')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(mockExecuteCommand).not.toHaveBeenCalled()
+  })
 
-  test("forwards a managed identity client ID", async () => {
-    process.env.IDENTITY_ENDPOINT = "https://appservice.azurewebsites.net/identity";
-    process.env.IDENTITY_HEADER = "my-id-token";
+  test('forwards a managed identity client ID', async () => {
+    process.env.IDENTITY_ENDPOINT = 'https://appservice.azurewebsites.net/identity'
+    process.env.IDENTITY_HEADER = 'my-id-token'
 
     const fetchMock = createFetchMock([
       (url) => {
-        expect(new URL(url).searchParams.get("client_id")).toBe("user-assigned-client");
+        expect(new URL(url).searchParams.get('client_id')).toBe('user-assigned-client')
         return jsonResponse({
-          access_token: "mi-token",
+          access_token: 'mi-token',
           expires_in: 3600,
-        });
+        })
       },
-    ]);
+    ])
 
     const credential = new DefaultAzureCredential({
-      managedIdentityClientId: "user-assigned-client",
+      managedIdentityClientId: 'user-assigned-client',
       fetch: fetchMock,
-    });
-    const token = await credential.getToken("scope/.default");
+    })
+    const token = await credential.getToken('scope/.default')
 
-    expect(token.token).toBe("mi-token");
-  });
+    expect(token.token).toBe('mi-token')
+  })
 
-  test("falls back to Azure CLI when managed identity is unavailable", async () => {
+  test('falls back to Azure CLI when managed identity is unavailable', async () => {
     const fetchMock = createFetchMock([
       () =>
-        new Response("", {
+        new Response('', {
           status: 500,
-          statusText: "IMDS unavailable",
+          statusText: 'IMDS unavailable',
         }),
-    ]);
+    ])
 
     mockExecuteCommand.mockImplementation(async (command, args) => {
-      expect(command).toBe("az");
-      expect(args).toEqual(["account", "get-access-token", "--output", "json", "--scope", "scope/.default"]);
+      expect(command).toBe('az')
+      expect(args).toEqual([
+        'account',
+        'get-access-token',
+        '--output',
+        'json',
+        '--scope',
+        'scope/.default',
+      ])
 
       return {
         stdout: JSON.stringify({
-          accessToken: "cli-token",
+          accessToken: 'cli-token',
           expires_on: 1_700_000_000_001,
         }),
-        stderr: "",
-      };
-    });
+        stderr: '',
+      }
+    })
 
     const token = await getDefaultAzureCredentialToken({
-      scope: "scope/.default",
+      scope: 'scope/.default',
       fetch: fetchMock,
-    });
+    })
 
-    expect(token.token).toBe("cli-token");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(mockExecuteCommand).toHaveBeenCalledTimes(1);
-  });
+    expect(token.token).toBe('cli-token')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(mockExecuteCommand).toHaveBeenCalledTimes(1)
+  })
 
-  test("falls back to Azure PowerShell when CLI is unavailable", async () => {
+  test('falls back to Azure PowerShell when CLI is unavailable', async () => {
     const fetchMock = createFetchMock([
       () =>
-        new Response("", {
+        new Response('', {
           status: 500,
-          statusText: "IMDS unavailable",
+          statusText: 'IMDS unavailable',
         }),
-    ]);
+    ])
 
     mockExecuteCommand.mockImplementation(async (command) => {
-      if (command === "az") {
-        throw unavailableCommandError("az missing");
+      if (command === 'az') {
+        throw unavailableCommandError('az missing')
       }
 
       return {
         stdout: JSON.stringify({
-          accessToken: "powershell-token",
-          tokenType: "Bearer",
-          expiresOn: "1700000000100",
+          accessToken: 'powershell-token',
+          tokenType: 'Bearer',
+          expiresOn: '1700000000100',
         }),
-        stderr: "",
-      };
-    });
+        stderr: '',
+      }
+    })
 
     const token = await getDefaultAzureCredentialToken({
-      scope: "resource/.default",
+      scope: 'resource/.default',
       fetch: fetchMock,
-    });
+    })
 
-    expect(token.token).toBe("powershell-token");
-    expect(mockExecuteCommand).toHaveBeenCalledWith("az", [
-      "account",
-      "get-access-token",
-      "--output",
-      "json",
-      "--scope",
-      "resource/.default",
-    ]);
-    expect(mockExecuteCommand).toHaveBeenCalledWith("pwsh", [
-      "-NoProfile",
-      "-NoLogo",
-      "-NonInteractive",
-      "-Command",
+    expect(token.token).toBe('powershell-token')
+    expect(mockExecuteCommand).toHaveBeenCalledWith('az', [
+      'account',
+      'get-access-token',
+      '--output',
+      'json',
+      '--scope',
+      'resource/.default',
+    ])
+    expect(mockExecuteCommand).toHaveBeenCalledWith('pwsh', [
+      '-NoProfile',
+      '-NoLogo',
+      '-NonInteractive',
+      '-Command',
       expect.stringContaining("Get-AzAccessToken -ResourceUrl 'resource'"),
-    ]);
-  });
+    ])
+  })
 
-  test("does not continue to CLI when service principal request fails", async () => {
-    process.env.AZURE_TENANT_ID = "tenant";
-    process.env.AZURE_CLIENT_ID = "client";
-    process.env.AZURE_CLIENT_SECRET = "secret";
+  test('does not continue to CLI when service principal request fails', async () => {
+    process.env.AZURE_TENANT_ID = 'tenant'
+    process.env.AZURE_CLIENT_ID = 'client'
+    process.env.AZURE_CLIENT_SECRET = 'secret'
 
     const fetchMock = createFetchMock([
       () =>
         new Response(
           JSON.stringify({
             error: {
-              code: "invalid_client",
+              code: 'invalid_client',
             },
-            error_description: "invalid credentials",
+            error_description: 'invalid credentials',
           }),
           {
             status: 401,
-            statusText: "Unauthorized",
+            statusText: 'Unauthorized',
             headers: {
-              "content-type": "application/json",
+              'content-type': 'application/json',
             },
           },
         ),
-    ]);
+    ])
 
     await expect(
       getDefaultAzureCredentialToken({
-        scope: "scope/.default",
+        scope: 'scope/.default',
         fetch: fetchMock,
       }),
-    ).rejects.toBeInstanceOf(TokenRequestError);
+    ).rejects.toBeInstanceOf(TokenRequestError)
 
-    expect(mockExecuteCommand).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
+    expect(mockExecuteCommand).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 
-  test("throws when no credentials are available", async () => {
+  test('throws when no credentials are available', async () => {
     const fetchMock = createFetchMock([
       () =>
-        new Response("", {
+        new Response('', {
           status: 500,
-          statusText: "IMDS unavailable",
+          statusText: 'IMDS unavailable',
         }),
-    ]);
+    ])
 
     mockExecuteCommand.mockImplementation(async (command) => {
-      throw unavailableCommandError(`${command} missing`);
-    });
+      throw unavailableCommandError(`${command} missing`)
+    })
 
     await expect(
       getDefaultAzureCredentialToken({
-        scope: "scope/.default",
+        scope: 'scope/.default',
         fetch: fetchMock,
       }),
-    ).rejects.toBeInstanceOf(TokenUnavailableError);
+    ).rejects.toBeInstanceOf(TokenUnavailableError)
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(mockExecuteCommand).toHaveBeenCalledTimes(3);
-  });
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(mockExecuteCommand).toHaveBeenCalledTimes(3)
+  })
 
-  test("uses only Azure CLI when developer credentials are available", async () => {
-    process.env.AZURE_TENANT_ID = "tenant";
-    process.env.AZURE_CLIENT_ID = "client";
-    process.env.AZURE_CLIENT_SECRET = "secret";
-    process.env.IDENTITY_ENDPOINT = "https://appservice.azurewebsites.net/identity";
-    process.env.IDENTITY_HEADER = "my-id-token";
+  test('uses only Azure CLI when developer credentials are available', async () => {
+    process.env.AZURE_TENANT_ID = 'tenant'
+    process.env.AZURE_CLIENT_ID = 'client'
+    process.env.AZURE_CLIENT_SECRET = 'secret'
+    process.env.IDENTITY_ENDPOINT = 'https://appservice.azurewebsites.net/identity'
+    process.env.IDENTITY_HEADER = 'my-id-token'
 
-    const originalFetch = globalThis.fetch;
-    const fetchMock = vi.fn<typeof fetch>();
-    globalThis.fetch = fetchMock;
+    const originalFetch = globalThis.fetch
+    const fetchMock = vi.fn<typeof fetch>()
+    globalThis.fetch = fetchMock
     mockExecuteCommand.mockResolvedValue({
       stdout: JSON.stringify({
-        accessToken: "cli-token",
+        accessToken: 'cli-token',
         expires_on: 1_700_000_000_001,
       }),
-      stderr: "",
-    });
+      stderr: '',
+    })
 
     try {
-      const token = await getDeveloperAzureCredentialToken({ scope: "scope/.default" });
+      const token = await getDeveloperAzureCredentialToken({ scope: 'scope/.default' })
 
-      expect(token.token).toBe("cli-token");
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(mockExecuteCommand).toHaveBeenCalledTimes(1);
-      expect(mockExecuteCommand).toHaveBeenCalledWith("az", [
-        "account",
-        "get-access-token",
-        "--output",
-        "json",
-        "--scope",
-        "scope/.default",
-      ]);
+      expect(token.token).toBe('cli-token')
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(mockExecuteCommand).toHaveBeenCalledTimes(1)
+      expect(mockExecuteCommand).toHaveBeenCalledWith('az', [
+        'account',
+        'get-access-token',
+        '--output',
+        'json',
+        '--scope',
+        'scope/.default',
+      ])
     } finally {
-      globalThis.fetch = originalFetch;
+      globalThis.fetch = originalFetch
     }
-  });
+  })
 
-  test("falls back from Azure CLI to Azure PowerShell for developer credentials", async () => {
-    const controller = new AbortController();
+  test('falls back from Azure CLI to Azure PowerShell for developer credentials', async () => {
+    const controller = new AbortController()
     mockExecuteCommand.mockImplementation(async (command) => {
-      if (command === "az") {
-        throw unavailableCommandError("az missing");
+      if (command === 'az') {
+        throw unavailableCommandError('az missing')
       }
 
       return {
         stdout: JSON.stringify({
-          accessToken: "powershell-token",
-          expiresOn: "1700000000100",
+          accessToken: 'powershell-token',
+          expiresOn: '1700000000100',
         }),
-        stderr: "",
-      };
-    });
+        stderr: '',
+      }
+    })
 
     const token = await getDeveloperAzureCredentialToken({
-      scope: "resource/.default",
+      scope: 'resource/.default',
       abortSignal: controller.signal,
-    });
+    })
 
-    expect(token.token).toBe("powershell-token");
-    expect(mockExecuteCommand.mock.calls.map(([command]) => command)).toEqual(["az", "pwsh"]);
+    expect(token.token).toBe('powershell-token')
+    expect(mockExecuteCommand.mock.calls.map(([command]) => command)).toEqual(['az', 'pwsh'])
     expect(mockExecuteCommand.mock.calls.map(([, , options]) => options)).toEqual([
       { abortSignal: controller.signal },
       { abortSignal: controller.signal },
-    ]);
-  });
+    ])
+  })
 
-  test("does not try Azure PowerShell after malformed Azure CLI output", async () => {
-    mockExecuteCommand.mockResolvedValue({ stdout: "not json", stderr: "" });
+  test('does not try Azure PowerShell after malformed Azure CLI output', async () => {
+    mockExecuteCommand.mockResolvedValue({ stdout: 'not json', stderr: '' })
 
-    await expect(getDeveloperAzureCredentialToken({ scope: "scope/.default" })).rejects.toBeInstanceOf(
-      TokenRequestError,
-    );
-    expect(mockExecuteCommand).toHaveBeenCalledTimes(1);
-    expect(mockExecuteCommand).toHaveBeenCalledWith("az", expect.any(Array));
-  });
+    await expect(
+      getDeveloperAzureCredentialToken({ scope: 'scope/.default' }),
+    ).rejects.toBeInstanceOf(TokenRequestError)
+    expect(mockExecuteCommand).toHaveBeenCalledTimes(1)
+    expect(mockExecuteCommand).toHaveBeenCalledWith('az', expect.any(Array))
+  })
 
-  test("reports unavailable developer credentials after exhausting command sources", async () => {
+  test('reports unavailable developer credentials after exhausting command sources', async () => {
     mockExecuteCommand.mockImplementation(async (command) => {
-      throw unavailableCommandError(`${command} missing`);
-    });
+      throw unavailableCommandError(`${command} missing`)
+    })
 
-    await expect(getDeveloperAzureCredentialToken({ scope: "scope/.default" })).rejects.toBeInstanceOf(
-      TokenUnavailableError,
-    );
-    expect(mockExecuteCommand.mock.calls.map(([command]) => command)).toEqual(["az", "pwsh", "powershell"]);
-  });
+    await expect(
+      getDeveloperAzureCredentialToken({ scope: 'scope/.default' }),
+    ).rejects.toBeInstanceOf(TokenUnavailableError)
+    expect(mockExecuteCommand.mock.calls.map(([command]) => command)).toEqual([
+      'az',
+      'pwsh',
+      'powershell',
+    ])
+  })
 
-  test("starts no developer credential command for an already-aborted signal", async () => {
-    const reason = new Error("cancelled before developer authentication");
+  test('starts no developer credential command for an already-aborted signal', async () => {
+    const reason = new Error('cancelled before developer authentication')
 
     await expect(
       getDeveloperAzureCredentialToken({
-        scope: "scope/.default",
+        scope: 'scope/.default',
         abortSignal: AbortSignal.abort(reason),
       }),
-    ).rejects.toBe(reason);
-    expect(mockExecuteCommand).not.toHaveBeenCalled();
-  });
+    ).rejects.toBe(reason)
+    expect(mockExecuteCommand).not.toHaveBeenCalled()
+  })
 
-  test("does not try Azure PowerShell after active Azure CLI cancellation", async () => {
-    const controller = new AbortController();
-    const reason = new Error("cancelled developer authentication");
+  test('does not try Azure PowerShell after active Azure CLI cancellation', async () => {
+    const controller = new AbortController()
+    const reason = new Error('cancelled developer authentication')
     mockExecuteCommand.mockImplementation(
       async (_command, _args, options) =>
         new Promise((_resolve, reject) => {
-          expect(options?.abortSignal).toBe(controller.signal);
-          options?.abortSignal?.addEventListener("abort", () => reject(options.abortSignal?.reason), { once: true });
+          expect(options?.abortSignal).toBe(controller.signal)
+          options?.abortSignal?.addEventListener(
+            'abort',
+            () => reject(options.abortSignal?.reason),
+            { once: true },
+          )
         }),
-    );
+    )
 
     const token = getDeveloperAzureCredentialToken({
-      scope: "scope/.default",
+      scope: 'scope/.default',
       abortSignal: controller.signal,
-    });
-    await Promise.resolve();
-    controller.abort(reason);
+    })
+    await Promise.resolve()
+    controller.abort(reason)
 
-    await expect(token).rejects.toBe(reason);
-    expect(mockExecuteCommand).toHaveBeenCalledTimes(1);
-    expect(mockExecuteCommand).toHaveBeenCalledWith("az", expect.any(Array), {
+    await expect(token).rejects.toBe(reason)
+    expect(mockExecuteCommand).toHaveBeenCalledTimes(1)
+    expect(mockExecuteCommand).toHaveBeenCalledWith('az', expect.any(Array), {
       abortSignal: controller.signal,
-    });
-  });
-});
+    })
+  })
+})

@@ -1,54 +1,56 @@
-import { loadDefaultToken } from "./default-token-loader";
-import { createTokenProvider } from "../provider";
-import type { AccessToken, TokenProvider } from "../types";
+import { createTokenProvider } from '../provider'
+import type { AccessToken, TokenProvider } from '../types'
+import { loadDefaultToken } from './default-token-loader'
 
-export const storageOAuthScope = "https://storage.azure.com/.default";
-export const keyVaultOAuthScope = "https://vault.azure.net/.default";
-export const appConfigurationOAuthScope = "https://appconfig.azure.com/.default";
+export const storageOAuthScope = 'https://storage.azure.com/.default'
+export const keyVaultOAuthScope = 'https://vault.azure.net/.default'
+export const appConfigurationOAuthScope = 'https://appconfig.azure.com/.default'
 
 interface HeaderCredential {
-  getAuthorizationHeader(scope?: string | string[]): Promise<string>;
+  getAuthorizationHeader(scope?: string | string[]): Promise<string>
 }
 
 interface TokenCredential {
-  getToken(scopes: string | string[]): Promise<AccessToken | null>;
+  getToken(scopes: string | string[]): Promise<AccessToken | null>
 }
 
-export type AzureRequestCredential = HeaderCredential | TokenCredential;
+export type AzureRequestCredential = HeaderCredential | TokenCredential
 
 export interface ResolveAuthorizationInput {
-  credential?: AzureRequestCredential;
-  scope?: string | string[];
-  authorityHost?: string;
-  fetch: typeof globalThis.fetch;
-  defaultScope?: string | string[];
-  defaultAuthorityHost?: string;
-  tokenProviders?: Map<string, TokenProvider>;
+  credential?: AzureRequestCredential
+  scope?: string | string[]
+  authorityHost?: string
+  fetch: typeof globalThis.fetch
+  defaultScope?: string | string[]
+  defaultAuthorityHost?: string
+  tokenProviders?: Map<string, TokenProvider>
 }
 
 export function resolveAuthorizationScopes(scope?: string | string[]): string[] {
-  const values = (Array.isArray(scope) ? scope : [scope]).filter((value): value is string => typeof value === "string");
+  const values = (Array.isArray(scope) ? scope : [scope]).filter(
+    (value): value is string => typeof value === 'string',
+  )
   if (values.length === 0) {
-    return [storageOAuthScope];
+    return [storageOAuthScope]
   }
 
-  const scopes = values.map((value) => value.trim()).filter((value) => value.length > 0);
+  const scopes = values.map((value) => value.trim()).filter((value) => value.length > 0)
   if (scopes.length === 0) {
-    return [storageOAuthScope];
+    return [storageOAuthScope]
   }
 
-  return scopes;
+  return scopes
 }
 
 export function resolveRequiredScopes(scope: string | string[]): string[] {
-  const values = Array.isArray(scope) ? scope : [scope];
-  const scopes = values.map((value) => value.trim()).filter((value) => value.length > 0);
+  const values = Array.isArray(scope) ? scope : [scope]
+  const scopes = values.map((value) => value.trim()).filter((value) => value.length > 0)
 
   if (scopes.length === 0) {
-    throw new TypeError("At least one non-empty scope is required");
+    throw new TypeError('At least one non-empty scope is required')
   }
 
-  return scopes;
+  return scopes
 }
 
 export function hasAuthorizationHeaderCredential(
@@ -56,31 +58,35 @@ export function hasAuthorizationHeaderCredential(
 ): credential is HeaderCredential {
   return (
     credential != null &&
-    "getAuthorizationHeader" in credential &&
-    typeof credential.getAuthorizationHeader === "function"
-  );
+    'getAuthorizationHeader' in credential &&
+    typeof credential.getAuthorizationHeader === 'function'
+  )
 }
 
-export function hasTokenCredential(credential: AzureRequestCredential | undefined): credential is TokenCredential {
-  return credential != null && "getToken" in credential && typeof credential.getToken === "function";
+export function hasTokenCredential(
+  credential: AzureRequestCredential | undefined,
+): credential is TokenCredential {
+  return credential != null && 'getToken' in credential && typeof credential.getToken === 'function'
 }
 
-export async function resolveAuthorizationHeader(input: ResolveAuthorizationInput): Promise<string> {
-  const credential = input.credential;
-  const resolvedScopes = resolveAuthorizationScopes(input.scope ?? input.defaultScope);
-  const requestScope = resolveAuthorizationScopeArgument(input.scope ?? input.defaultScope);
+export async function resolveAuthorizationHeader(
+  input: ResolveAuthorizationInput,
+): Promise<string> {
+  const credential = input.credential
+  const resolvedScopes = resolveAuthorizationScopes(input.scope ?? input.defaultScope)
+  const requestScope = resolveAuthorizationScopeArgument(input.scope ?? input.defaultScope)
 
   if (hasAuthorizationHeaderCredential(credential)) {
-    return credential.getAuthorizationHeader(requestScope);
+    return credential.getAuthorizationHeader(requestScope)
   }
 
   if (hasTokenCredential(credential)) {
-    const accessToken = await credential.getToken(resolvedScopes);
+    const accessToken = await credential.getToken(resolvedScopes)
     if (accessToken == null) {
-      throw new Error("Unable to resolve a token from the configured credential");
+      throw new Error('Unable to resolve a token from the configured credential')
     }
 
-    return `${accessToken.tokenType ?? "Bearer"} ${accessToken.token}`;
+    return `${accessToken.tokenType ?? 'Bearer'} ${accessToken.token}`
   }
 
   const provider = getTokenProvider({
@@ -88,35 +94,35 @@ export async function resolveAuthorizationHeader(input: ResolveAuthorizationInpu
     authorityHost: input.authorityHost ?? input.defaultAuthorityHost,
     scopes: resolvedScopes,
     tokenProviders: input.tokenProviders,
-  });
+  })
 
-  const authorizationHeader = await provider.getAuthorizationHeader();
-  return authorizationHeader;
+  const authorizationHeader = await provider.getAuthorizationHeader()
+  return authorizationHeader
 }
 
 function resolveAuthorizationScopeArgument(scope?: string | string[]): string | string[] {
-  const values = resolveAuthorizationScopes(scope);
+  const values = resolveAuthorizationScopes(scope)
   if (values.length === 1) {
-    return values[0]!;
+    return values[0]!
   }
 
-  return values;
+  return values
 }
 
 interface TokenProviderInput {
-  fetch: typeof globalThis.fetch;
-  authorityHost?: string;
-  scopes: string[];
-  tokenProviders?: Map<string, TokenProvider>;
+  fetch: typeof globalThis.fetch
+  authorityHost?: string
+  scopes: string[]
+  tokenProviders?: Map<string, TokenProvider>
 }
 
 function getTokenProvider(input: TokenProviderInput): TokenProvider {
-  const key = `${input.authorityHost ?? ""}|${JSON.stringify(input.scopes)}`;
-  const providers = input.tokenProviders ?? new Map<string, TokenProvider>();
+  const key = `${input.authorityHost ?? ''}|${JSON.stringify(input.scopes)}`
+  const providers = input.tokenProviders ?? new Map<string, TokenProvider>()
 
-  const cached = providers.get(key);
+  const cached = providers.get(key)
   if (cached != null) {
-    return cached;
+    return cached
   }
 
   const provider = createTokenProvider({
@@ -126,11 +132,11 @@ function getTokenProvider(input: TokenProviderInput): TokenProvider {
         scope: input.scopes.length === 1 ? input.scopes[0]! : input.scopes,
         fetch: input.fetch,
         authorityHost: input.authorityHost,
-      });
+      })
     },
     cacheKey: key,
-  });
+  })
 
-  providers.set(key, provider);
-  return provider;
+  providers.set(key, provider)
+  return provider
 }

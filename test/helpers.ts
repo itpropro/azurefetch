@@ -1,21 +1,22 @@
-import { vi } from "vitest";
+import { vi } from 'vitest'
 
-export type FetchMock = typeof globalThis.fetch;
+export type FetchMock = typeof globalThis.fetch
 
-export type FetchHandler = (url: string, init: RequestInit) => Response | Promise<Response>;
+export type FetchHandler = (url: string, init: RequestInit) => Response | Promise<Response>
 
 export function createFetchMock(handlers: FetchHandler[]): FetchMock {
-  let call = 0;
+  let call = 0
 
   return vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-    const handler = handlers[call];
-    call += 1;
+    const handler = handlers[call]
+    call += 1
 
     if (handler == null) {
-      throw new Error(`Unexpected fetch call ${call}`);
+      throw new Error(`Unexpected fetch call ${call}`)
     }
 
-    const normalizedUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const normalizedUrl =
+      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
 
     const normalizedInit: RequestInit =
       input instanceof Request
@@ -23,17 +24,17 @@ export function createFetchMock(handlers: FetchHandler[]): FetchMock {
             ...(await normalizeRequestInit(input)),
             ...init,
           }
-        : init;
+        : init
 
-    return Promise.resolve(handler(normalizedUrl, normalizedInit));
-  }) as FetchMock;
+    return Promise.resolve(handler(normalizedUrl, normalizedInit))
+  }) as FetchMock
 }
 
 async function normalizeRequestInit(request: Request): Promise<RequestInit> {
-  let body = request.body;
+  let body = request.body
   if (body != null && !request.bodyUsed) {
-    const cloned = request.clone();
-    body = await cloned.text();
+    const cloned = request.clone()
+    body = await cloned.text()
   }
 
   return {
@@ -48,65 +49,70 @@ async function normalizeRequestInit(request: Request): Promise<RequestInit> {
     referrer: request.referrer,
     referrerPolicy: request.referrerPolicy,
     signal: request.signal,
-  };
+  }
 }
 
-export function textResponse(body: string, status = 200, statusText = "OK", headers: HeadersInit = {}): Response {
-  const responseBody = status === 204 || status === 205 || status === 304 ? null : body;
+export function textResponse(
+  body: string,
+  status = 200,
+  statusText = 'OK',
+  headers: HeadersInit = {},
+): Response {
+  const responseBody = status === 204 || status === 205 || status === 304 ? null : body
   return new Response(responseBody, {
     status,
     statusText,
     headers,
-  });
+  })
 }
 
-export function jsonResponse(body: unknown, status = 200, statusText = "OK"): Response {
+export function jsonResponse(body: unknown, status = 200, statusText = 'OK'): Response {
   return new Response(JSON.stringify(body), {
     status,
     statusText,
     headers: {
-      "content-type": "application/json",
+      'content-type': 'application/json',
     },
-  });
+  })
 }
 
-export function getBodyString(body: RequestInit["body"]): string {
-  if (typeof body === "string") {
-    return body;
+export function getBodyString(body: RequestInit['body']): string {
+  if (typeof body === 'string') {
+    return body
   }
 
   if (body instanceof URLSearchParams) {
-    return body.toString();
+    return body.toString()
   }
 
-  return "";
+  return ''
 }
 
-export type EnvSnapshot = NodeJS.ProcessEnv;
+export type EnvSnapshot = NodeJS.ProcessEnv
 
 export function captureEnv(): EnvSnapshot {
-  return { ...process.env };
+  return { ...process.env }
 }
 
 export function restoreEnv(snapshot: EnvSnapshot): void {
   for (const key of Object.keys(process.env)) {
     if (!(key in snapshot)) {
-      delete process.env[key];
+      delete process.env[key]
     }
   }
 
   for (const [key, value] of Object.entries(snapshot)) {
     if (value == null) {
-      delete process.env[key];
-      continue;
+      delete process.env[key]
+      continue
     }
 
-    process.env[key] = value;
+    process.env[key] = value
   }
 }
 
 export function unavailableCommandError(message: string): NodeJS.ErrnoException {
-  const error = new Error(message) as NodeJS.ErrnoException;
-  error.code = "ENOENT";
-  return error;
+  const error = new Error(message) as NodeJS.ErrnoException
+  error.code = 'ENOENT'
+  return error
 }

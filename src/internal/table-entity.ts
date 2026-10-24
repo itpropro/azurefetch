@@ -1,38 +1,38 @@
 interface TableEntityLike {
-  partitionKey?: unknown;
-  rowKey?: unknown;
-  PartitionKey?: unknown;
-  RowKey?: unknown;
-  [key: string]: unknown;
+  partitionKey?: unknown
+  rowKey?: unknown
+  PartitionKey?: unknown
+  RowKey?: unknown
+  [key: string]: unknown
 }
 
 export interface ParsedTableEntity extends Record<string, unknown> {
-  partitionKey: string;
-  rowKey: string;
+  partitionKey: string
+  rowKey: string
 }
 
 export function getPartitionKey(entity: TableEntityLike): string {
-  if (typeof entity.partitionKey === "string") {
-    return entity.partitionKey;
+  if (typeof entity.partitionKey === 'string') {
+    return entity.partitionKey
   }
 
-  if (typeof entity.PartitionKey === "string") {
-    return entity.PartitionKey;
+  if (typeof entity.PartitionKey === 'string') {
+    return entity.PartitionKey
   }
 
-  throw new Error("Entity is missing PartitionKey/partitionKey");
+  throw new Error('Entity is missing PartitionKey/partitionKey')
 }
 
 export function getRowKey(entity: TableEntityLike): string {
-  if (typeof entity.rowKey === "string") {
-    return entity.rowKey;
+  if (typeof entity.rowKey === 'string') {
+    return entity.rowKey
   }
 
-  if (typeof entity.RowKey === "string") {
-    return entity.RowKey;
+  if (typeof entity.RowKey === 'string') {
+    return entity.RowKey
   }
 
-  throw new Error("Entity is missing RowKey/rowKey");
+  throw new Error('Entity is missing RowKey/rowKey')
 }
 
 export function normalizeEntityPayload(
@@ -40,87 +40,87 @@ export function normalizeEntityPayload(
   partitionKey: string,
   rowKey: string,
 ): Record<string, unknown> {
-  const payload: Record<string, unknown> = {};
+  const payload: Record<string, unknown> = {}
 
   for (const [name, value] of Object.entries(entity)) {
-    if (name === "partitionKey" || name === "rowKey") {
-      continue;
+    if (name === 'partitionKey' || name === 'rowKey') {
+      continue
     }
 
     if (value !== undefined) {
-      payload[name] = value;
+      payload[name] = value
     }
   }
 
-  payload.PartitionKey = partitionKey;
-  payload.RowKey = rowKey;
+  payload.PartitionKey = partitionKey
+  payload.RowKey = rowKey
 
-  return payload;
+  return payload
 }
 
 export function parseTableEntity(rawEntity: unknown): ParsedTableEntity {
   if (!isRecord(rawEntity)) {
-    throw new Error("Invalid table entity response");
+    throw new Error('Invalid table entity response')
   }
 
-  const partitionKeyRaw = rawEntity.PartitionKey;
-  const rowKeyRaw = rawEntity.RowKey;
+  const partitionKeyRaw = rawEntity.PartitionKey
+  const rowKeyRaw = rawEntity.RowKey
 
-  if (typeof partitionKeyRaw !== "string" || typeof rowKeyRaw !== "string") {
-    throw new Error("Invalid table entity response");
+  if (typeof partitionKeyRaw !== 'string' || typeof rowKeyRaw !== 'string') {
+    throw new Error('Invalid table entity response')
   }
 
   const entity: ParsedTableEntity = {
     partitionKey: partitionKeyRaw,
     rowKey: rowKeyRaw,
-  };
-
-  for (const [name, value] of Object.entries(rawEntity)) {
-    if (name === "PartitionKey" || name === "RowKey") {
-      continue;
-    }
-
-    entity[name] = value;
   }
 
-  return entity;
+  for (const [name, value] of Object.entries(rawEntity)) {
+    if (name === 'PartitionKey' || name === 'RowKey') {
+      continue
+    }
+
+    entity[name] = value
+  }
+
+  return entity
 }
 
 export function parseTableEntityList(body: string): ParsedTableEntity[] {
   if (body.length === 0) {
-    return [];
+    return []
   }
 
-  const parsed = parseJson(body);
+  const parsed = parseJson(body)
   if (!isRecord(parsed)) {
-    return [];
+    return []
   }
 
-  const rawEntities = parsed.value;
+  const rawEntities = parsed.value
   if (!Array.isArray(rawEntities)) {
-    return [];
+    return []
   }
 
-  const entities: ParsedTableEntity[] = [];
+  const entities: ParsedTableEntity[] = []
   for (const entity of rawEntities) {
     if (!isRecord(entity)) {
-      continue;
+      continue
     }
 
-    if (typeof entity.PartitionKey !== "string" || typeof entity.RowKey !== "string") {
-      continue;
+    if (typeof entity.PartitionKey !== 'string' || typeof entity.RowKey !== 'string') {
+      continue
     }
 
-    entities.push(parseTableEntity(entity));
+    entities.push(parseTableEntity(entity))
   }
 
-  return entities;
+  return entities
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function parseJson(value: string): unknown {
-  return JSON.parse(value);
+  return JSON.parse(value)
 }

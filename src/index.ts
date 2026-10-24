@@ -1,20 +1,23 @@
-import "./configure-default-token-loader";
+import './configure-default-token-loader'
 
-export { AzureClient } from "./client";
-export type { AzureClientOptions, AzureRequestInit, AzureRequestOverrides } from "./client";
-export type { AccessToken, TokenReuseOptions, TokenProvider } from "./types";
-export { shouldRefreshToken, getAuthorizationHeader } from "./token";
-export { createTokenProvider } from "./provider";
-export { getServicePrincipalToken } from "./service-principal";
-export { getManagedIdentityToken } from "./managed-identity";
-export { getDefaultAzureCredentialToken, getDeveloperAzureCredentialToken } from "./default-credential";
-export type { DeveloperAzureCredentialOptions } from "./default-credential";
-export { DefaultAzureCredential } from "./default-azure-credential";
-export type { DefaultAzureCredentialOptions } from "./default-azure-credential";
-export { AzureFetchError, TokenUnavailableError, TokenRequestError } from "./errors";
-export * from "./blob";
-export * from "./table";
-export { AppConfigurationClient, AppConfigurationRequestError } from "./app-configuration";
+export { AzureClient } from './client'
+export type { AzureClientOptions, AzureRequestInit, AzureRequestOverrides } from './client'
+export type { AccessToken, TokenReuseOptions, TokenProvider } from './types'
+export { shouldRefreshToken, getAuthorizationHeader } from './token'
+export { createTokenProvider } from './provider'
+export { getServicePrincipalToken } from './service-principal'
+export { getManagedIdentityToken } from './managed-identity'
+export {
+  getDefaultAzureCredentialToken,
+  getDeveloperAzureCredentialToken,
+} from './default-credential'
+export type { DeveloperAzureCredentialOptions } from './default-credential'
+export { DefaultAzureCredential } from './default-azure-credential'
+export type { DefaultAzureCredentialOptions } from './default-azure-credential'
+export { AzureFetchError, TokenUnavailableError, TokenRequestError } from './errors'
+export * from './blob'
+export * from './table'
+export { AppConfigurationClient, AppConfigurationRequestError } from './app-configuration'
 export type {
   AppConfigurationClientOptions,
   AppConfigurationPageSettings,
@@ -25,8 +28,8 @@ export type {
   GetConfigurationSettingOptions,
   ListConfigurationSettingsOptions,
   SetConfigurationSettingOptions,
-} from "./app-configuration";
-export { KeyVaultRequestError, KeyVaultSecretClient } from "./keyvault-secrets";
+} from './app-configuration'
+export { KeyVaultRequestError, KeyVaultSecretClient } from './keyvault-secrets'
 export type {
   DeletedSecret,
   DeletedSecretPage,
@@ -40,8 +43,15 @@ export type {
   SecretPropertiesPage,
   SetSecretOptions,
   UpdateSecretPropertiesOptions,
-} from "./keyvault-secrets";
-export { uploadText, downloadText, downloadJson, getEntity, upsertEntity, listEntitiesPage } from "./convenience";
+} from './keyvault-secrets'
+export {
+  uploadText,
+  downloadText,
+  downloadJson,
+  getEntity,
+  upsertEntity,
+  listEntitiesPage,
+} from './convenience'
 export type {
   BlobDownloadJsonResponse,
   BlobDownloadTextResponse,
@@ -50,4 +60,4 @@ export type {
   TableGetEntityResponse,
   TableListEntitiesOptions,
   TableUpsertEntityResponse,
-} from "./convenience";
+} from './convenience'

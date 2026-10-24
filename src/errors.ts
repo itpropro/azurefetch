@@ -1,24 +1,24 @@
 export class AzureFetchError extends Error {
-  public override readonly name = "AzureFetchError";
+  public override readonly name = 'AzureFetchError'
 
   constructor(
     message: string,
     public readonly cause?: unknown,
   ) {
-    super(message);
+    super(message)
   }
 }
 
 export class TokenUnavailableError extends AzureFetchError {
-  public override readonly name = "TokenUnavailableError";
+  public override readonly name = 'TokenUnavailableError'
 
   constructor(message: string, cause?: unknown) {
-    super(message, cause);
+    super(message, cause)
   }
 }
 
 export class TokenRequestError extends AzureFetchError {
-  public override readonly name = "TokenRequestError";
+  public override readonly name = 'TokenRequestError'
 
   constructor(
     message: string,
@@ -26,6 +26,6 @@ export class TokenRequestError extends AzureFetchError {
     public readonly errorCode?: string,
     cause?: unknown,
   ) {
-    super(message, cause);
+    super(message, cause)
   }
 }

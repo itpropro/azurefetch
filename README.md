@@ -72,27 +72,27 @@ import {
   listEntitiesPage,
   uploadText,
   upsertEntity,
-} from "azurefetch";
+} from 'azurefetch'
 ```
 
 `AzureClient` is the main entrypoint for standard request flows. It resolves Azure auth headers and delegates the actual request to `fetch`.
 
 ```ts
-import { AzureClient } from "azurefetch";
+import { AzureClient } from 'azurefetch'
 
 const client = new AzureClient({
-  scope: "https://storage.azure.com/.default",
-  authorityHost: "https://login.microsoftonline.com",
-});
+  scope: 'https://storage.azure.com/.default',
+  authorityHost: 'https://login.microsoftonline.com',
+})
 
-const response = await client.fetch("https://example.blob.core.windows.net/container/hello.txt", {
-  method: "GET",
+const response = await client.fetch('https://example.blob.core.windows.net/container/hello.txt', {
+  method: 'GET',
   headers: {
-    "x-ms-version": "2024-11-04",
+    'x-ms-version': '2024-11-04',
   },
-});
+})
 
-console.log(response.status);
+console.log(response.status)
 ```
 
 ### Convenience helpers
@@ -108,36 +108,48 @@ import {
   listEntitiesPage,
   upsertEntity,
   uploadText,
-} from "azurefetch";
+} from 'azurefetch'
 
 const client = new AzureClient({
-  scope: "https://storage.azure.com/.default",
-});
+  scope: 'https://storage.azure.com/.default',
+})
 
-await uploadText(client, "https://myaccount.blob.core.windows.net/container/hello.txt", "hello");
+await uploadText(client, 'https://myaccount.blob.core.windows.net/container/hello.txt', 'hello')
 
-const textResult = await downloadText(client, "https://myaccount.blob.core.windows.net/container/hello.txt");
-console.log(textResult.text);
+const textResult = await downloadText(
+  client,
+  'https://myaccount.blob.core.windows.net/container/hello.txt',
+)
+console.log(textResult.text)
 
 const config = await downloadJson<{ mode: string }>(
   client,
-  "https://myaccount.blob.core.windows.net/container/config.json",
-);
-console.log(config.value.mode);
+  'https://myaccount.blob.core.windows.net/container/config.json',
+)
+console.log(config.value.mode)
 
-const entity = await getEntity(client, "https://myaccount.table.core.windows.net/my-table", "pk", "rk");
-console.log(entity.entity?.rowKey);
+const entity = await getEntity(
+  client,
+  'https://myaccount.table.core.windows.net/my-table',
+  'pk',
+  'rk',
+)
+console.log(entity.entity?.rowKey)
 
-await upsertEntity(client, "https://myaccount.table.core.windows.net/my-table", {
-  partitionKey: "pk",
-  rowKey: "rk",
+await upsertEntity(client, 'https://myaccount.table.core.windows.net/my-table', {
+  partitionKey: 'pk',
+  rowKey: 'rk',
   value: 1,
-});
+})
 
-for await (const page of listEntitiesPage(client, "https://myaccount.table.core.windows.net/my-table", {
-  maxPageSize: 100,
-})) {
-  console.log(page.entities.length);
+for await (const page of listEntitiesPage(
+  client,
+  'https://myaccount.table.core.windows.net/my-table',
+  {
+    maxPageSize: 100,
+  },
+)) {
+  console.log(page.entities.length)
 }
 ```
 
@@ -146,24 +158,28 @@ for await (const page of listEntitiesPage(client, "https://myaccount.table.core.
 Import `AppConfigurationClient` and `DefaultAzureCredential` from the main package:
 
 ```ts
-import { AppConfigurationClient } from "azurefetch";
-import { DefaultAzureCredential } from "azurefetch";
+import { AppConfigurationClient } from 'azurefetch'
+import { DefaultAzureCredential } from 'azurefetch'
 
-const client = new AppConfigurationClient("https://my-app-config.azconfig.io", new DefaultAzureCredential(), {
-  prefix: "my-app",
-  label: "production",
-});
+const client = new AppConfigurationClient(
+  'https://my-app-config.azconfig.io',
+  new DefaultAzureCredential(),
+  {
+    prefix: 'my-app',
+    label: 'production',
+  },
+)
 
-await client.setConfigurationSetting("api-url", "https://example.com", {
-  contentType: "text/plain",
-  tags: { service: "frontend" },
-});
+await client.setConfigurationSetting('api-url', 'https://example.com', {
+  contentType: 'text/plain',
+  tags: { service: 'frontend' },
+})
 
-const setting = await client.getConfigurationSetting("api-url");
-console.log(setting.value);
+const setting = await client.getConfigurationSetting('api-url')
+console.log(setting.value)
 
 for await (const page of client.listConfigurationSettings().byPage()) {
-  console.log(page.value.map((item) => item.key));
+  console.log(page.value.map((item) => item.key))
 }
 ```
 
@@ -178,36 +194,48 @@ import {
   KeyVaultSecretClient,
   StorageSharedKeyCredential,
   TableServiceClient,
-} from "azurefetch";
+} from 'azurefetch'
 
-const blobService = new BlobServiceClient("https://myaccount.blob.core.windows.net", new DefaultAzureCredential());
+const blobService = new BlobServiceClient(
+  'https://myaccount.blob.core.windows.net',
+  new DefaultAzureCredential(),
+)
 
-const container = blobService.getContainerClient("my-container");
-const blobClient = container.getBlockBlobClient("greeting.txt");
-await blobClient.upload("hello");
+const container = blobService.getContainerClient('my-container')
+const blobClient = container.getBlockBlobClient('greeting.txt')
+await blobClient.upload('hello')
 
 const tableService = new TableServiceClient(
-  "https://myaccount.table.core.windows.net",
-  new StorageSharedKeyCredential("myaccount", "<storage-key>"),
-);
+  'https://myaccount.table.core.windows.net',
+  new StorageSharedKeyCredential('myaccount', '<storage-key>'),
+)
 
-const table = tableService.getTableClient("my-table");
-await table.createIfNotExists();
+const table = tableService.getTableClient('my-table')
+await table.createIfNotExists()
 
-const secretClient = new KeyVaultSecretClient("https://my-vault.vault.azure.net", new DefaultAzureCredential());
+const secretClient = new KeyVaultSecretClient(
+  'https://my-vault.vault.azure.net',
+  new DefaultAzureCredential(),
+)
 
-const secret = await secretClient.getSecret("my-secret");
-console.log(secret.value);
+const secret = await secretClient.getSecret('my-secret')
+console.log(secret.value)
 ```
 
 Account SAS generation requires a shared-key credential and is asynchronous because signing uses Web Crypto:
 
 ```ts
-const sharedKey = new StorageSharedKeyCredential("myaccount", "<storage-key>");
-const blobServiceWithSharedKey = new BlobServiceClient("https://myaccount.blob.core.windows.net", sharedKey);
-const accountSasUrl = await blobServiceWithSharedKey.generateAccountSasUrl(new Date(Date.now() + 60 * 60 * 1000), {
-  permissions: "rl",
-});
+const sharedKey = new StorageSharedKeyCredential('myaccount', '<storage-key>')
+const blobServiceWithSharedKey = new BlobServiceClient(
+  'https://myaccount.blob.core.windows.net',
+  sharedKey,
+)
+const accountSasUrl = await blobServiceWithSharedKey.generateAccountSasUrl(
+  new Date(Date.now() + 60 * 60 * 1000),
+  {
+    permissions: 'rl',
+  },
+)
 ```
 
 ## Credentials
@@ -231,25 +259,25 @@ Custom authority hosts, Key Vault URLs, and App Configuration endpoints must use
 4. Azure PowerShell (`Get-AzAccessToken` via `pwsh` or `powershell`) when command execution is available
 
 ```ts
-import { getDefaultAzureCredentialToken } from "azurefetch";
+import { getDefaultAzureCredentialToken } from 'azurefetch'
 
 const token = await getDefaultAzureCredentialToken({
-  scope: "https://management.azure.com/.default",
-});
+  scope: 'https://management.azure.com/.default',
+})
 
-console.log(token.token);
+console.log(token.token)
 ```
 
 Provide an explicit `fetch` implementation if you are running outside globals:
 
 ```ts
-import { getDefaultAzureCredentialToken } from "azurefetch";
+import { getDefaultAzureCredentialToken } from 'azurefetch'
 
 const token = await getDefaultAzureCredentialToken({
-  scope: "https://graph.microsoft.com/.default",
+  scope: 'https://graph.microsoft.com/.default',
   fetch: globalThis.fetch,
-  authorityHost: "https://login.microsoftonline.com",
-});
+  authorityHost: 'https://login.microsoftonline.com',
+})
 ```
 
 `globalThis.fetch` is required for managed identity and service principal flows. CLI and PowerShell are only attempted when command execution is available, including Node-compatible runtimes and Deno.
@@ -259,13 +287,13 @@ const token = await getDefaultAzureCredentialToken({
 `getDeveloperAzureCredentialToken` is a narrower alternative that only tries Azure CLI, then Azure PowerShell when CLI credentials are unavailable. It does not read service-principal environment variables or probe managed identity.
 
 ```ts
-import { getDeveloperAzureCredentialToken } from "azurefetch";
+import { getDeveloperAzureCredentialToken } from 'azurefetch'
 
-const controller = new AbortController();
+const controller = new AbortController()
 const token = await getDeveloperAzureCredentialToken({
-  scope: "https://management.azure.com/.default",
+  scope: 'https://management.azure.com/.default',
   abortSignal: controller.signal,
-});
+})
 ```
 
 Malformed CLI output and cancellation are terminal. Azure PowerShell is not attempted in either case.

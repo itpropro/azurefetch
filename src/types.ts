@@ -1,16 +1,16 @@
 export interface AccessToken {
-  token: string;
-  tokenType?: "Bearer" | "pop";
-  expiresOnTimestamp: number;
-  refreshAfterTimestamp?: number;
+  token: string
+  tokenType?: 'Bearer' | 'pop'
+  expiresOnTimestamp: number
+  refreshAfterTimestamp?: number
 }
 
 export interface TokenReuseOptions {
-  now?: number;
-  refreshSkewMs?: number;
+  now?: number
+  refreshSkewMs?: number
 }
 
 export interface TokenProvider {
-  getToken(): Promise<AccessToken>;
-  getAuthorizationHeader(): Promise<string>;
+  getToken(): Promise<AccessToken>
+  getAuthorizationHeader(): Promise<string>
 }

@@ -1,122 +1,139 @@
-import { TokenRequestError } from "../errors";
+import { TokenRequestError } from '../errors'
 
 export interface HttpRequestContext {
-  url: string;
-  init?: RequestInit;
+  url: string
+  init?: RequestInit
 }
 
-export async function fetchJson(input: string, init: RequestInit, fetcher: typeof globalThis.fetch): Promise<unknown> {
-  const response = await fetcher(input, init);
+export async function fetchJson(
+  input: string,
+  init: RequestInit,
+  fetcher: typeof globalThis.fetch,
+): Promise<unknown> {
+  const response = await fetcher(input, init)
 
   if (!response.ok) {
-    let message = `${response.status} ${response.statusText}`;
-    let errorCode: string | undefined;
+    let message = `${response.status} ${response.statusText}`
+    let errorCode: string | undefined
 
     try {
-      const payload = await parseResponseJson(response);
+      const payload = await parseResponseJson(response)
 
-      const candidateCode = getOAuthErrorCode(payload);
+      const candidateCode = getOAuthErrorCode(payload)
       if (candidateCode != null) {
-        errorCode = candidateCode;
+        errorCode = candidateCode
       }
 
-      const description = getOAuthErrorDescription(payload);
+      const description = getOAuthErrorDescription(payload)
       if (description != null) {
-        message += `: ${description}`;
+        message += `: ${description}`
       }
     } catch {
       // ignore
     }
 
-    throw new TokenRequestError(message, response.status, errorCode);
+    throw new TokenRequestError(message, response.status, errorCode)
   }
 
-  const payload = await parseResponseJson(response);
-  return payload;
+  const payload = await parseResponseJson(response)
+  return payload
 }
 
 async function parseResponseJson(response: Response): Promise<unknown> {
-  return JSON.parse(await response.text());
+  return JSON.parse(await response.text())
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
+  return value !== null && typeof value === 'object'
 }
 
 function getOAuthErrorCode(payload: unknown): string | undefined {
   if (!isOAuthErrorPayload(payload)) {
-    return undefined;
+    return undefined
   }
 
-  const error = payload.error;
-  if (typeof error === "string") {
-    return error;
+  const error = payload.error
+  if (typeof error === 'string') {
+    return error
   }
 
-  if (error != null && typeof error === "object" && typeof error.code === "string") {
-    return error.code;
+  if (error != null && typeof error === 'object' && typeof error.code === 'string') {
+    return error.code
   }
 
-  return undefined;
+  return undefined
 }
 
 function getOAuthErrorDescription(payload: unknown): string | undefined {
   if (!isOAuthErrorPayload(payload)) {
-    return undefined;
+    return undefined
   }
 
-  return typeof payload.error_description === "string" ? payload.error_description : undefined;
+  return typeof payload.error_description === 'string' ? payload.error_description : undefined
 }
 
 function isOAuthErrorPayload(
   payload: unknown,
 ): payload is { error?: string | { code?: string }; error_description?: string } {
   if (!isRecord(payload)) {
-    return false;
+    return false
   }
 
-  const candidate = payload;
-  const error = candidate.error;
+  const candidate = payload
+  const error = candidate.error
   if (error == null) {
-    return typeof candidate.error_description === "undefined" || typeof candidate.error_description === "string";
+    return (
+      typeof candidate.error_description === 'undefined' ||
+      typeof candidate.error_description === 'string'
+    )
   }
 
-  if (typeof error === "string") {
-    return typeof candidate.error_description === "undefined" || typeof candidate.error_description === "string";
+  if (typeof error === 'string') {
+    return (
+      typeof candidate.error_description === 'undefined' ||
+      typeof candidate.error_description === 'string'
+    )
   }
 
-  if (typeof error !== "object") {
-    return false;
+  if (typeof error !== 'object') {
+    return false
   }
 
   if (!isRecord(error)) {
-    return false;
+    return false
   }
 
-  const code = error.code;
-  if (code != null && typeof code !== "string") {
-    return false;
+  const code = error.code
+  if (code != null && typeof code !== 'string') {
+    return false
   }
 
-  return typeof candidate.error_description === "undefined" || typeof candidate.error_description === "string";
+  return (
+    typeof candidate.error_description === 'undefined' ||
+    typeof candidate.error_description === 'string'
+  )
 }
 
 export function appendQuery(url: URL, key: string, value: string | undefined): URL {
   if (value == null) {
-    return url;
+    return url
   }
 
-  url.searchParams.set(key, value);
-  return url;
+  url.searchParams.set(key, value)
+  return url
 }
 
-export async function fetchText(input: string, init: RequestInit, fetcher: typeof globalThis.fetch): Promise<string> {
-  const response = await fetcher(input, init);
+export async function fetchText(
+  input: string,
+  init: RequestInit,
+  fetcher: typeof globalThis.fetch,
+): Promise<string> {
+  const response = await fetcher(input, init)
 
   if (!response.ok) {
-    let message = `${response.status} ${response.statusText}`;
-    throw new TokenRequestError(message, response.status);
+    let message = `${response.status} ${response.statusText}`
+    throw new TokenRequestError(message, response.status)
   }
 
-  return response.text();
+  return response.text()
 }
