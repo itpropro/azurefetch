@@ -1,4 +1,10 @@
 import { fetchJson, normalizeToken } from './internal/oauth'
+import {
+  defaultMaxRetryDelayInMs,
+  defaultRetryableStatuses,
+  exponentialDelay,
+} from './internal/request-core'
+import type { RetryOptions } from './internal/request-core'
 import { defaultFetch, getEnv } from './internal/runtime'
 import { TokenRequestError } from './token-request-error'
 import { TokenUnavailableError } from './token-unavailable-error'
@@ -9,10 +15,16 @@ export interface ManagedIdentityOptions {
   clientId?: string
   objectId?: string
   resourceId?: string
+  abortSignal?: AbortSignal
+  /** IMDS defaults to 5 retries from 800 ms and also retries 404 and 410. */
+  retryOptions?: RetryOptions
   fetch?: typeof globalThis.fetch
 }
 
 const imdsProbeTimeoutMs = 1000
+const imdsRetryableStatuses = [...defaultRetryableStatuses, 404, 410]
+// IMDS answers 410 for up to 70 s while it updates; five waits from 3 s span at least 74.4 s.
+const imdsGoneRetryDelayInMs = 3000
 const whitespace = /\s/u
 
 export async function getManagedIdentityToken(
@@ -34,6 +46,8 @@ export async function getManagedIdentityToken(
     throw new TypeError('Specify at most one of clientId, objectId, or resourceId')
   }
 
+  const { abortSignal: signal } = options
+  signal?.throwIfAborted()
   const resource = scope.slice(0, -'/.default'.length)
   const fetcher = options.fetch ?? defaultFetch
   const identityEndpoint = getEnv('IDENTITY_ENDPOINT')
@@ -44,8 +58,9 @@ export async function getManagedIdentityToken(
     const url = tokenUrl(identityEndpoint, '2019-08-01', resource, options, 'mi_res_id')
     return await requestToken(
       url,
-      { headers: { Metadata: 'true', 'X-IDENTITY-HEADER': identityHeader } },
+      { headers: { Metadata: 'true', 'X-IDENTITY-HEADER': identityHeader }, signal },
       fetcher,
+      options.retryOptions,
     )
   }
 
@@ -62,16 +77,44 @@ export async function getManagedIdentityToken(
         method: 'POST',
         headers: { Metadata: 'true' },
         body: new URLSearchParams({ resource, 'api-version': '2017-09-01' }),
+        signal,
       },
       fetcher,
+      options.retryOptions,
     )
   }
 
   const imdsHost = getEnv('AZURE_POD_IDENTITY_AUTHORITY_HOST') ?? 'http://169.254.169.254'
   const imdsEndpoint = `${imdsHost}/metadata/identity/oauth2/token`
-  await probeImds(imdsEndpoint, fetcher)
+  await probeImds(imdsEndpoint, fetcher, signal)
   const url = tokenUrl(imdsEndpoint, '2018-02-01', resource, options, 'msi_res_id')
-  return await requestToken(url, { headers: { Metadata: 'true' } }, fetcher)
+  return await requestToken(
+    url,
+    { headers: { Metadata: 'true' }, signal },
+    fetcher,
+    imdsRetryOptions(options.retryOptions),
+  )
+}
+
+/** IMDS needs longer retries, including 404 and 410 while an identity or IMDS itself is set up. */
+function imdsRetryOptions(options: RetryOptions = {}): RetryOptions {
+  const retryDelayInMs = options.retryDelayInMs ?? 800
+  const maxRetryDelayInMs = options.maxRetryDelayInMs ?? defaultMaxRetryDelayInMs
+  return {
+    maxRetries: 5,
+    retryableStatuses: imdsRetryableStatuses,
+    ...options,
+    retryDelayInMs,
+    retryDelay: (context) =>
+      options.retryDelay?.(context) ??
+      (context.response?.status === 410 && context.retryAfterInMs === undefined
+        ? exponentialDelay(
+            context.attempt,
+            Math.max(imdsGoneRetryDelayInMs, retryDelayInMs),
+            maxRetryDelayInMs,
+          )
+        : undefined),
+  }
 }
 
 function tokenUrl(
@@ -98,11 +141,19 @@ function tokenUrl(
 }
 
 /** IMDS answers a request without the metadata header immediately, so any response proves it is reachable. */
-async function probeImds(endpoint: string, fetcher: typeof globalThis.fetch): Promise<void> {
+async function probeImds(
+  endpoint: string,
+  fetcher: typeof globalThis.fetch,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const timeout = AbortSignal.timeout(imdsProbeTimeoutMs)
   try {
-    const response = await fetcher(endpoint, { signal: AbortSignal.timeout(imdsProbeTimeoutMs) })
+    const response = await fetcher(endpoint, {
+      signal: signal === undefined ? timeout : AbortSignal.any([signal, timeout]),
+    })
     await response.body?.cancel()
   } catch (error) {
+    signal?.throwIfAborted()
     throw new TokenUnavailableError('IMDS endpoint unavailable', error)
   }
 }
@@ -111,11 +162,13 @@ async function requestToken(
   url: URL,
   init: RequestInit,
   fetcher: typeof globalThis.fetch,
+  retryOptions: RetryOptions | undefined,
 ): Promise<AccessToken> {
   let payload: unknown
   try {
-    payload = await fetchJson(url, init, fetcher)
+    payload = await fetchJson(url, init, fetcher, retryOptions)
   } catch (error) {
+    init.signal?.throwIfAborted()
     if (error instanceof TokenRequestError && error.status !== undefined && error.status < 500) {
       throw error
     }

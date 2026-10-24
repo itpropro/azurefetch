@@ -9,15 +9,18 @@ import {
   upsertEntity,
   uploadText,
 } from '../src/convenience'
+import type { RetryOptions } from '../src/internal/request-core'
 import { collect, createFetchMock, getBodyString, jsonResponse, textResponse } from './helpers'
 
 const blobUrl = 'https://example.blob.core.windows.net/container/file.txt'
 const tableUrl = 'https://example.table.core.windows.net/mytable'
 const etag = `W/"datetime'2026-08-24T12%3A00%3A00.0000000Z'"`
+const serverError = () => textResponse('failed', 500, 'Server Error')
 
-function bearerClient(fetcher: typeof fetch): AzureClient {
+function bearerClient(fetcher: typeof fetch, retryOptions?: RetryOptions): AzureClient {
   return new AzureClient({
     fetch: fetcher,
+    retryOptions,
     credential: { getAuthorizationHeader: async () => 'Bearer test' },
   })
 }
@@ -45,13 +48,15 @@ describe('blob helpers', () => {
     expect(response.status).toBe(201)
   })
 
-  test('uploadText reports failures with their status', async () => {
-    const fetcher = createFetchMock([() => textResponse('failed', 500, 'Server Error')])
+  test('uploadText reports failures with their status after the client retries once each', async () => {
+    const fetcher = createFetchMock([serverError, serverError])
+    const client = bearerClient(fetcher, { maxRetries: 1, retryDelay: () => 0 })
 
-    await expect(uploadText(bearerClient(fetcher), blobUrl, 'hello')).rejects.toMatchObject({
+    await expect(uploadText(client, blobUrl, 'hello')).rejects.toMatchObject({
       name: 'AzureRequestError',
       status: 500,
     })
+    expect(fetcher).toHaveBeenCalledTimes(2)
   })
 
   test('downloadText and downloadJson read the blob body', async () => {

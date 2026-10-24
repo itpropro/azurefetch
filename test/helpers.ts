@@ -57,6 +57,13 @@ const credentialEnvironment = [
   'AZURE_TENANT_ID',
   'AZURE_CLIENT_ID',
   'AZURE_CLIENT_SECRET',
+  'AZURE_CLIENT_CERTIFICATE_PATH',
+  'AZURE_CLIENT_CERTIFICATE_PASSWORD',
+  'AZURE_CLIENT_SEND_CERTIFICATE_CHAIN',
+  'AZURE_USERNAME',
+  'AZURE_PASSWORD',
+  'AZURE_ADDITIONALLY_ALLOWED_TENANTS',
+  'AZURE_IDENTITY_DISABLE_MULTITENANTAUTH',
   'AZURE_FEDERATED_TOKEN_FILE',
   'IDENTITY_ENDPOINT',
   'IDENTITY_HEADER',
@@ -69,6 +76,17 @@ export function clearCredentialEnvironment(): void {
   for (const name of credentialEnvironment) {
     vi.stubEnv(name, undefined)
   }
+}
+
+/** Waits for a promise that must reject, for example while fake timers run, and returns the reason. */
+export async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise
+  } catch (error) {
+    return error
+  }
+
+  throw new Error('Expected the promise to reject')
 }
 
 export async function collect<T>(items: AsyncIterable<T>): Promise<T[]> {

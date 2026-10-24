@@ -92,6 +92,7 @@ export class KeyVaultSecretClient {
     this.client = new AzureClient({
       credential,
       fetch: options.fetch,
+      retryOptions: options.retryOptions,
       scope: options.scope ?? keyVaultOAuthScope,
       authorityHost: options.authorityHost,
     })

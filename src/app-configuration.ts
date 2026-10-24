@@ -83,6 +83,7 @@ export class AppConfigurationClient {
     this.client = new AzureClient({
       credential,
       fetch: options.fetch,
+      retryOptions: options.retryOptions,
       scope: options.scope ?? appConfigurationScope(this.url),
       authorityHost: options.authorityHost,
     })

@@ -29,6 +29,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:app-configuration": "AZUREFETCH_RUN_APP_CONFIGURATION_TESTS=1 vitest run test/app-configuration.integration.test.ts",
+    "test:bun": "bun --bun vitest run test/client-certificate.test.ts",
     "test:edge-smoke": "bun run test/edge-runtime-smoke.ts",
     "test:keyvault": "AZUREFETCH_RUN_KEYVAULT_TESTS=1 vitest run test/keyvault.integration.test.ts",
     "test:storage": "AZUREFETCH_RUN_STORAGE_TESTS=1 vitest run test/storage.integration.test.ts",
@@ -36,7 +37,7 @@
     "test:watch": "vitest",
     "release": "bunx changelogen --release --push",
     "stage:npm": "bash -c 'set -euo pipefail; if [[ $# -ne 1 || $1 != *.tgz ]]; then echo \"Usage: bun run stage:npm -- <package.tgz>\" >&2; exit 2; fi; npm stage publish \"$1\" --access public --ignore-scripts' --",
-    "check": "oxfmt --check && oxlint && vitest run && obuild && bun run test:edge-smoke",
+    "check": "oxfmt --check && oxlint && vitest run && bun run test:bun && obuild && bun run test:edge-smoke",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check"
   },

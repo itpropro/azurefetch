@@ -263,9 +263,18 @@ for await (const page of table.listEntities(query).byPage()) {
 `AzureClient` accepts credentials implementing one of:
 
 - `getAuthorizationHeader(scope?)`
-- `getToken(scopes)`
+- `getToken(scopes, options?)`, the `TokenCredential` shape of `@azure/core-auth`
 
 If no credential is provided, it uses a `DefaultAzureCredential` for the configured authority host.
+
+`DefaultAzureCredential` and `ClientSecretCredential` are `TokenCredential`s, so Azure SDK clients can use them. Their `getToken` honors these options:
+
+- `abortSignal` cancels only that caller; a shared token request stops once every caller has aborted.
+- `tenantId` requests a token from another tenant if it is the configured tenant or listed in `additionallyAllowedTenants` (`*` allows any). Set `AZURE_IDENTITY_DISABLE_MULTITENANTAUTH` to ignore it.
+- `claims` answers a claims challenge with a new token. Azure CLI and Azure PowerShell can't, so their error contains the `az login` and `Connect-AzAccount` command to run.
+- `enableCae` requests a token for continuous access evaluation.
+
+Tokens are cached per scope, tenant and CAE setting. When a refresh fails, the cached token is used until it expires, and the next refresh waits 30 s.
 
 Custom authority hosts, Key Vault URLs, and App Configuration endpoints must use HTTPS.
 
@@ -273,9 +282,15 @@ Custom authority hosts, Key Vault URLs, and App Configuration endpoints must use
 
 `getDefaultAzureCredentialToken` tries credentials in this order:
 
-1. environment service principal (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`)
-2. AKS workload identity (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_FEDERATED_TOKEN_FILE`); its failures stop the chain
-3. managed identity (`/.default` scope)
+1. environment credential with `AZURE_TENANT_ID` and `AZURE_CLIENT_ID`, using the first of:
+   - a client secret in `AZURE_CLIENT_SECRET`
+   - a PEM certificate with its private key in `AZURE_CLIENT_CERTIFICATE_PATH`. `AZURE_CLIENT_CERTIFICATE_PASSWORD` decrypts the key on Node, Bun and Deno; `AZURE_CLIENT_SEND_CERTIFICATE_CHAIN=true` sends the chain for subject name and issuer authentication.
+   - a username and password in `AZURE_USERNAME` and `AZURE_PASSWORD`, which fails for accounts that require MFA
+
+   Its failures stop the chain. `AZURE_ADDITIONALLY_ALLOWED_TENANTS` lists further tenants, separated by semicolons, unless `additionallyAllowedTenants` is set.
+
+2. AKS workload identity (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_FEDERATED_TOKEN_FILE`); its failures stop the chain, except a refused per-call tenant
+3. managed identity (`/.default` scope), using `managedIdentityClientId` or else `AZURE_CLIENT_ID`
 4. Azure CLI (`az account get-access-token`) when command execution is available
 5. Azure PowerShell (`Get-AzAccessToken` via `pwsh` or `powershell`) when command execution is available
 
@@ -304,6 +319,23 @@ const token = await getDefaultAzureCredentialToken({
 ```
 
 `globalThis.fetch` is required for managed identity and service principal flows. CLI and PowerShell are only attempted where `node:child_process` is available: Node, Bun, and Deno 2.
+
+### Retries
+
+Token and service requests retry network errors and 408, 429, 500, 502, 503 and 504 responses up to 3 times. The wait doubles from 1 s up to 60 s, or follows the service's `retry-after-ms`, `x-ms-retry-after-ms` or `Retry-After` header; a hint above the maximum wait returns the response without retrying. Managed identity on IMDS retries 5 times from 800 ms and also retries 404 and 410. Azure CLI and Azure PowerShell don't retry, and stream bodies are sent once.
+
+Credentials, `AzureClient` and the service clients accept `retryOptions`, and an `AzureClient` request can override them:
+
+```ts
+import { AzureClient } from 'azurefetch'
+
+const client = new AzureClient({ retryOptions: { maxRetries: 5, maxRetryDelayInMs: 30_000 } })
+const response = await client.fetch('https://myaccount.blob.core.windows.net/container/blob', {
+  azure: { retryOptions: { maxRetries: 0 } },
+})
+```
+
+`retryOptions` also takes `retryDelayInMs`, `retryableStatuses`, and `shouldRetry(context)` and `retryDelay(context)` hooks that return `undefined` to keep the default.
 
 ### Developer credential flow
 

@@ -1,7 +1,12 @@
 import { AzureRequestError } from '../azure-request-error'
 import { StorageSharedKeyCredential } from '../storage-shared-key-credential'
-import { getAuthorizationHeader, storageOAuthScope } from './request-core'
-import type { AzureRequestCredential } from './request-core'
+import {
+  getAuthorizationHeader,
+  sendWithRetry,
+  storageOAuthScope,
+  validatedUrl,
+} from './request-core'
+import type { AzureRequestCredential, RetryOptions } from './request-core'
 import { defaultFetch } from './runtime'
 import { encodeUtf8 } from './storage-encoding'
 import { getAccountNameFromUrl } from './storage-url'
@@ -12,6 +17,7 @@ export type StorageCredential = AzureRequestCredential | StorageSharedKeyCredent
 
 export interface StorageClientOptions {
   fetch?: typeof globalThis.fetch
+  retryOptions?: RetryOptions
 }
 
 export interface StorageRequestInit {
@@ -52,6 +58,7 @@ export const tableProtocol: StorageProtocol = {
 export class StorageTransport {
   private readonly credential: StorageCredential | undefined
   private readonly fetcher: typeof globalThis.fetch
+  private readonly retryOptions: RetryOptions | undefined
   private readonly protocol: StorageProtocol
 
   public constructor(
@@ -61,6 +68,7 @@ export class StorageTransport {
   ) {
     this.credential = credential
     this.fetcher = options.fetch ?? defaultFetch
+    this.retryOptions = options.retryOptions
     this.protocol = protocol
   }
 
@@ -85,7 +93,11 @@ export class StorageTransport {
     setKnownContentLength(headers, init.body)
     await this.authorize(method, url, headers)
 
-    return await this.fetcher(url, { method, headers, body: init.body })
+    const requestUrl = validatedUrl(url, { method, headers })
+    return await sendWithRetry(
+      async () => await this.fetcher(requestUrl, { method, headers, body: init.body }),
+      { ...this.retryOptions, body: init.body },
+    )
   }
 
   /** Sets the Authorization header when the client has a credential; SAS URLs carry their own. */

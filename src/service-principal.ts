@@ -1,6 +1,8 @@
 import { fetchJson, normalizeToken } from './internal/oauth'
 import { resolveRequiredScopes } from './internal/request-core'
+import type { RetryOptions } from './internal/request-core'
 import { defaultFetch } from './internal/runtime'
+import { tokenRequestClaims } from './internal/token-options'
 import { sanitizeAuthorityHost } from './internal/url'
 import { TokenRequestError } from './token-request-error'
 import type { AccessToken } from './types'
@@ -12,6 +14,11 @@ export interface ServicePrincipalOptions {
   scope: string | string[]
   authorityHost?: string
   abortSignal?: AbortSignal
+  /** JSON claims challenge to send with the request. */
+  claims?: string
+  /** Requests a token for continuous access evaluation. */
+  enableCae?: boolean
+  retryOptions?: RetryOptions
   fetch?: typeof globalThis.fetch
 }
 
@@ -26,6 +33,7 @@ export async function getServicePrincipalToken(
   }
 
   const scopes = resolveRequiredScopes(options.scope)
+  const claims = tokenRequestClaims(options.claims, options.enableCae)
   const authorityHost = sanitizeAuthorityHost(
     options.authorityHost ?? 'https://login.microsoftonline.com',
   )
@@ -42,10 +50,12 @@ export async function getServicePrincipalToken(
           client_secret: clientSecret,
           grant_type: 'client_credentials',
           scope: scopes.join(' '),
+          ...(claims === undefined ? {} : { claims }),
         }),
         signal: abortSignal,
       },
       options.fetch ?? defaultFetch,
+      options.retryOptions,
     )
   } catch (error) {
     abortSignal?.throwIfAborted()
