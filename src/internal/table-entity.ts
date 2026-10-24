@@ -60,18 +60,24 @@ const decoders: Partial<Record<string, (value: string) => TableEntityValue>> = {
   'Edm.Int64': BigInt,
 }
 
+// Entries become own properties, so a property such as `__proto__` keeps its name.
 export function serializeEntity({ partitionKey, rowKey, ...properties }: TableEntity): string {
-  const body: Record<string, string | number | boolean | null> = {}
-  for (const [name, property] of Object.entries(properties)) {
+  const body = Object.entries(properties).flatMap(([name, property]) => {
     const serviceName = serviceNames.get(name) ?? name
     const [value, type] = encodeProperty(property)
-    body[serviceName] = value
-    if (type !== undefined) {
-      body[`${serviceName}@odata.type`] = type
-    }
-  }
+    return type === undefined
+      ? [[serviceName, value]]
+      : [
+          [serviceName, value],
+          [`${serviceName}@odata.type`, type],
+        ]
+  })
 
-  return JSON.stringify({ ...body, PartitionKey: partitionKey, RowKey: rowKey })
+  return JSON.stringify({
+    ...Object.fromEntries(body),
+    PartitionKey: partitionKey,
+    RowKey: rowKey,
+  })
 }
 
 /** `$select` of public property names; the etag is always returned and is not selectable. */
@@ -88,25 +94,25 @@ export function parseEntity(value: unknown): TableEntityResult {
     throw new TypeError('Invalid table entity response')
   }
 
-  const properties: Record<string, TableEntityValue> = {}
-  const system: Record<string, string> = {}
+  const properties: [string, TableEntityValue][] = []
+  const system: [string, string][] = []
   for (const name of Object.keys(value)) {
     const property = jsonProperty(value, name)
     const publicName = publicNames.get(name)
     if (publicName !== undefined) {
       if (typeof property === 'string') {
-        system[publicName] = property
+        system.push([publicName, property])
       }
     } else if (!name.startsWith('odata.') && !name.endsWith('@odata.type')) {
       const decoded = decodeProperty(property, jsonProperty(value, `${name}@odata.type`))
       if (decoded !== undefined) {
-        properties[name] = decoded
+        properties.push([name, decoded])
       }
     }
   }
 
   // System properties win over user properties with the same name.
-  return { ...properties, ...system, etag }
+  return { ...Object.fromEntries(properties), ...Object.fromEntries(system), etag }
 }
 
 export function parseEntityList(value: unknown): TableEntityResult[] {

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { StorageSharedKeyCredential } from '../src/storage-shared-key-credential'
 import { odata } from '../src/table'
+import type { TableEntity } from '../src/table'
 import { TableClient } from '../src/table-client'
 import { TableServiceClient } from '../src/table-service-client'
 import { collect, createFetchMock, getBodyString, jsonResponse, textResponse } from './helpers'
@@ -185,6 +186,29 @@ describe('TableClient', () => {
       bytes: new Uint8Array([1, 2, 255]),
       id: { value: '0f8fad5b-d9cb-469f-a165-70867728950e', type: 'Guid' },
     })
+  })
+
+  test('keeps a property named __proto__ when writing and reading an entity', async () => {
+    const entity: TableEntity = { partitionKey: 'p', rowKey: 'r' }
+    Object.defineProperty(entity, '__proto__', { value: 'value', enumerable: true })
+    const bodies: string[] = []
+    const fetcher = createFetchMock([
+      (_url, init) => {
+        bodies.push(getBodyString(init.body))
+        return textResponse('', 204)
+      },
+      () =>
+        textResponse(
+          String.raw`{"odata.etag":"W/\"1\"","PartitionKey":"p","RowKey":"r","__proto__":"value"}`,
+        ),
+    ])
+    const table = anonymousTable(fetcher)
+
+    await table.upsertEntity(entity)
+    const read = await table.getEntity('p', 'r')
+
+    expect(bodies[0]).toContain('"__proto__":"value"')
+    expect(read !== undefined && Object.hasOwn(read, '__proto__')).toBe(true)
   })
 
   test('returns undefined for a missing entity', async () => {
