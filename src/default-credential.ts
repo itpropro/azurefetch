@@ -1,12 +1,15 @@
-import { normalizeCommandToken } from './internal/oauth'
+import { fetchJson, normalizeCommandToken, normalizeToken } from './internal/oauth'
 import { resolveRequiredScopes } from './internal/request-core'
 import {
+  defaultFetch,
   executeCommand,
   getEnv,
   hasCommandExecution,
   isCommandUnavailable,
   isWindows,
+  readTextFile,
 } from './internal/runtime'
+import { sanitizeAuthorityHost } from './internal/url'
 import { getManagedIdentityToken } from './managed-identity'
 import { getServicePrincipalToken } from './service-principal'
 import { TokenUnavailableError } from './token-unavailable-error'
@@ -14,6 +17,8 @@ import type { AccessToken } from './types'
 
 export interface DefaultAzureCredentialOptions {
   authorityHost?: string
+  /** Tenant for workload identity, Azure CLI and Azure PowerShell. */
+  tenantId?: string
   managedIdentityClientId?: string
   fetch?: typeof globalThis.fetch
 }
@@ -29,11 +34,17 @@ export interface DeveloperAzureCredentialOptions {
 
 // Azure CLI runs through the Windows shell, so scopes are limited to characters it doesn't interpret.
 const safeCommandScope = /^[\w.:/-]+$/u
+// The tenant also reaches the Windows shell and a PowerShell script.
+const safeTenantId = /^[\w.-]+$/u
 
 export async function getDefaultAzureCredentialToken(
   options: DefaultAzureCredentialTokenOptions,
 ): Promise<AccessToken> {
   const scopes = resolveRequiredScopes(options.scope)
+  if (options.tenantId !== undefined && !safeTenantId.test(options.tenantId)) {
+    throw new TypeError('tenantId may only contain letters, digits and _ . -')
+  }
+
   const tenantId = getEnv('AZURE_TENANT_ID')
   const clientId = getEnv('AZURE_CLIENT_ID')
   const clientSecret = getEnv('AZURE_CLIENT_SECRET')
@@ -47,6 +58,24 @@ export async function getDefaultAzureCredentialToken(
       authorityHost: options.authorityHost,
       fetch: options.fetch,
     })
+  }
+
+  // The AKS workload identity webhook also sets AZURE_CLIENT_ID, so this must run before managed identity.
+  const workloadTenantId = options.tenantId ?? tenantId
+  const workloadClientId = options.managedIdentityClientId ?? clientId
+  const federatedTokenFile = getEnv('AZURE_FEDERATED_TOKEN_FILE')
+  if (
+    workloadTenantId !== undefined &&
+    workloadClientId !== undefined &&
+    federatedTokenFile !== undefined
+  ) {
+    return await getWorkloadIdentityToken(
+      workloadTenantId,
+      workloadClientId,
+      federatedTokenFile,
+      scopes,
+      options,
+    )
   }
 
   const [scope] = scopes
@@ -64,7 +93,9 @@ export async function getDefaultAzureCredentialToken(
     }
   }
 
-  const developerToken = await unlessUnavailable(async () => await getDeveloperToken(scopes))
+  const developerToken = await unlessUnavailable(
+    async () => await getDeveloperToken(scopes, undefined, options.tenantId),
+  )
   if (developerToken !== undefined) {
     return developerToken
   }
@@ -81,18 +112,24 @@ export async function getDeveloperAzureCredentialToken(
   return await getDeveloperToken(resolveRequiredScopes(options.scope), options.abortSignal)
 }
 
-async function getDeveloperToken(scopes: string[], signal?: AbortSignal): Promise<AccessToken> {
+async function getDeveloperToken(
+  scopes: string[],
+  signal?: AbortSignal,
+  tenantId?: string,
+): Promise<AccessToken> {
   if (!hasCommandExecution()) {
     throw new TokenUnavailableError('Command execution is unavailable')
   }
 
-  const cliToken = await unlessUnavailable(async () => await getAzureCliToken(scopes, signal))
+  const cliToken = await unlessUnavailable(
+    async () => await getAzureCliToken(scopes, signal, tenantId),
+  )
   if (cliToken !== undefined) {
     return cliToken
   }
 
   const powerShellToken = await unlessUnavailable(
-    async () => await getAzurePowerShellToken(scopes, signal),
+    async () => await getAzurePowerShellToken(scopes, signal, tenantId),
   )
   if (powerShellToken !== undefined) {
     return powerShellToken
@@ -101,6 +138,36 @@ async function getDeveloperToken(scopes: string[], signal?: AbortSignal): Promis
   throw new TokenUnavailableError(
     'Could not find available developer credentials: Azure CLI and Azure PowerShell are unavailable',
   )
+}
+
+async function getWorkloadIdentityToken(
+  tenantId: string,
+  clientId: string,
+  tokenFile: string,
+  scopes: string[],
+  options: DefaultAzureCredentialOptions,
+): Promise<AccessToken> {
+  // Kubernetes rotates the projected token in place, so read it for every request.
+  const assertion = (await readTextFile(tokenFile)).trim()
+  const authorityHost = sanitizeAuthorityHost(
+    options.authorityHost ?? 'https://login.microsoftonline.com',
+  )
+  const payload = await fetchJson(
+    `${authorityHost}/${tenantId}/oauth2/v2.0/token`,
+    {
+      method: 'POST',
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_assertion: assertion,
+        client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+        grant_type: 'client_credentials',
+        scope: scopes.join(' '),
+      }),
+    },
+    options.fetch ?? defaultFetch,
+  )
+
+  return normalizeToken(payload)
 }
 
 async function unlessUnavailable(
@@ -117,7 +184,11 @@ async function unlessUnavailable(
   }
 }
 
-async function getAzureCliToken(scopes: string[], signal?: AbortSignal): Promise<AccessToken> {
+async function getAzureCliToken(
+  scopes: string[],
+  signal?: AbortSignal,
+  tenantId?: string,
+): Promise<AccessToken> {
   if (!scopes.every((scope) => safeCommandScope.test(scope))) {
     throw new TypeError(
       'Developer credential scopes may only contain letters, digits and _ . : / -',
@@ -128,7 +199,15 @@ async function getAzureCliToken(scopes: string[], signal?: AbortSignal): Promise
   try {
     output = await executeCommand(
       'az',
-      ['account', 'get-access-token', '--output', 'json', '--scope', ...scopes],
+      [
+        'account',
+        'get-access-token',
+        '--output',
+        'json',
+        '--scope',
+        ...scopes,
+        ...(tenantId === undefined ? [] : ['--tenant', tenantId]),
+      ],
       { signal, shell: isWindows() },
     )
   } catch (error) {
@@ -142,6 +221,7 @@ async function getAzureCliToken(scopes: string[], signal?: AbortSignal): Promise
 async function getAzurePowerShellToken(
   scopes: string[],
   signal?: AbortSignal,
+  tenantId?: string,
 ): Promise<AccessToken> {
   const [scope] = scopes
   if (scopes.length !== 1 || scope === undefined) {
@@ -149,10 +229,11 @@ async function getAzurePowerShellToken(
   }
 
   const resource = scope.endsWith('/.default') ? scope.slice(0, -'/.default'.length) : scope
+  const tenantArgument = tenantId === undefined ? '' : ` -TenantId '${tenantId}'`
   // Az.Accounts 5 returns a SecureString token; NetworkCredential unwraps it on PowerShell 5.1 and 7.
   const script = [
     "$ErrorActionPreference = 'Stop'",
-    `$token = Get-AzAccessToken -ResourceUrl '${resource.replaceAll("'", "''")}'`,
+    `$token = Get-AzAccessToken -ResourceUrl '${resource.replaceAll("'", "''")}'${tenantArgument}`,
     "$value = if ($token.Token -is [securestring]) { [System.Net.NetworkCredential]::new('', $token.Token).Password } else { $token.Token }",
     '@{ accessToken = $value; expiresOn = $token.ExpiresOn.ToUnixTimeSeconds() } | ConvertTo-Json -Compress',
   ].join('; ')

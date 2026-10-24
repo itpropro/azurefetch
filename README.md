@@ -23,7 +23,7 @@ The current release is `azurefetch@0.3.2`. It ships one ESM entrypoint targeting
 
 | Area              | Implemented operations                                                                                                                         |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Authentication    | Service principal, managed identity, Azure CLI, Azure PowerShell, token credentials, header credentials                                        |
+| Authentication    | Service principal, workload identity, managed identity, Azure CLI, Azure PowerShell, token credentials, header credentials                     |
 | Blob Storage      | Connection strings; container create, delete, existence, and listing; blob upload, download, properties, and delete; batch delete; account SAS |
 | Table Storage     | Connection strings; table create and delete; entity get, upsert, delete, and listing; atomic transactions                                      |
 | Key Vault secrets | Secret set, get, update, delete, recover, and purge; secret, deleted secret, and version listing                                               |
@@ -256,9 +256,12 @@ Custom authority hosts, Key Vault URLs, and App Configuration endpoints must use
 `getDefaultAzureCredentialToken` tries credentials in this order:
 
 1. environment service principal (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`)
-2. managed identity (`/.default` scope)
-3. Azure CLI (`az account get-access-token`) when command execution is available
-4. Azure PowerShell (`Get-AzAccessToken` via `pwsh` or `powershell`) when command execution is available
+2. AKS workload identity (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_FEDERATED_TOKEN_FILE`); its failures stop the chain
+3. managed identity (`/.default` scope)
+4. Azure CLI (`az account get-access-token`) when command execution is available
+5. Azure PowerShell (`Get-AzAccessToken` via `pwsh` or `powershell`) when command execution is available
+
+The `tenantId` option selects the tenant for workload identity, Azure CLI and Azure PowerShell. For an explicit service principal, use `new ClientSecretCredential(tenantId, clientId, clientSecret)`.
 
 ```ts
 import { getDefaultAzureCredentialToken } from 'azurefetch'
