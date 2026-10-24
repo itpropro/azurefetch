@@ -3,6 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/azurefetch?style=flat&colorA=18181B&colorB=B45309)](https://www.npmjs.com/package/azurefetch)
 [![dependencies](https://img.shields.io/badge/dependencies-0-B45309?style=flat&labelColor=18181B)](https://www.npmjs.com/package/azurefetch?activeTab=dependencies)
 [![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fitpropro.github.io%2Fazurefetch%2Fbadge.json&style=flat)](https://itpropro.github.io/azurefetch/)
+[![openssf scorecard](https://img.shields.io/ossf-scorecard/github.com/itpropro/azurefetch?label=openssf%20scorecard&style=flat&colorA=18181B&colorB=B45309)](https://scorecard.dev/viewer/?uri=github.com/itpropro/azurefetch)
 [![bundle size](https://img.shields.io/bundlephobia/minzip/azurefetch?style=flat&colorA=18181B&colorB=B45309)](https://bundlephobia.com/package/azurefetch)
 
 Fetch-first Azure utilities for modern runtimes.
