@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/itpropro/azurefetch/compare/v0.4.0...v0.5.0) (2026-10-24)
+
+
+### Features
+
+* **core:** add client secret and workload identity credentials ([537272f](https://github.com/itpropro/azurefetch/commit/537272fa415078c2c32e1dd65887c9df81911946))
+* **core:** add client secret and workload identity credentials ([#44](https://github.com/itpropro/azurefetch/issues/44)) ([6ba3efc](https://github.com/itpropro/azurefetch/commit/6ba3efcd5ddfb24a83b236d2d9f911c1f23febf0))
+
 ## [0.4.0](https://github.com/itpropro/azurefetch/compare/v0.3.2...v0.4.0) (2026-10-24)
 
 
