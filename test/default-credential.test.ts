@@ -27,6 +27,11 @@ const tokenForRequestedScope = (_url: string, init: RequestInit) =>
     expires_in: 3600,
   })
 const azureCliCall = /^az /u
+const appServiceIdentityUrl = /^https:\/\/appservice\.azurewebsites\.net\/identity\?/u
+const tokenRequest = (url: string, init: RequestInit) => ({
+  url,
+  form: Object.fromEntries(new URLSearchParams(getBodyString(init.body))),
+})
 const commandDirectories: string[] = []
 
 /** Replaces PATH with fake executables that log their arguments and run the given shell body. */
@@ -249,6 +254,149 @@ describe('DefaultAzureCredential', () => {
     await expect(credential.getAuthorizationHeader('a/.default')).resolves.toBe('Bearer a/.default')
     await expect(credential.getAuthorizationHeader('b/.default')).resolves.toBe('Bearer b/.default')
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('DefaultAzureCredential getToken options', () => {
+  const claims = '{"access_token":{"nbf":{"essential":true,"value":"1700000000"}}}'
+  const encodedClaims = Buffer.from(claims).toString('base64')
+
+  test('allows the tenants in AZURE_ADDITIONALLY_ALLOWED_TENANTS for the environment service principal', async () => {
+    useServicePrincipalEnvironment()
+    vi.stubEnv('AZURE_ADDITIONALLY_ALLOWED_TENANTS', 'guest;other')
+    const fetchMock = createFetchMock([
+      (url) => {
+        expect(url).toBe('https://login.microsoftonline.com/other/oauth2/v2.0/token')
+        return jsonResponse({ access_token: 'other-token', expires_in: 3600 })
+      },
+    ])
+
+    await expect(
+      new DefaultAzureCredential({ fetch: fetchMock }).getToken(scope, { tenantId: 'other' }),
+    ).resolves.toMatchObject({ token: 'other-token' })
+  })
+
+  test('prefers an empty additionallyAllowedTenants and stops the chain when the environment refuses the tenant', async () => {
+    useServicePrincipalEnvironment()
+    useAppServiceEnvironment()
+    vi.stubEnv('AZURE_ADDITIONALLY_ALLOWED_TENANTS', 'guest')
+    const calls = await installCommands({ az: printToken('cli-token') })
+    const fetchMock = vi.fn<typeof fetch>()
+    const credential = new DefaultAzureCredential({
+      additionallyAllowedTenants: [],
+      fetch: fetchMock,
+    })
+
+    await expect(credential.getToken(scope, { tenantId: 'guest' })).rejects.toBeInstanceOf(
+      TokenUnavailableError,
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+    await expect(calls()).resolves.toStrictEqual([])
+  })
+
+  test('sends the allowed tenant, claims and CAE capability with workload identity', async () => {
+    await useWorkloadIdentityEnvironment()
+    const requests: ReturnType<typeof tokenRequest>[] = []
+    const credential = new DefaultAzureCredential({
+      additionallyAllowedTenants: ['guest'],
+      fetch: createFetchMock([
+        (url, init) => {
+          requests.push(tokenRequest(url, init))
+          return jsonResponse({ access_token: 'workload-token', expires_in: 3600 })
+        },
+      ]),
+    })
+
+    await expect(
+      credential.getToken(scope, { tenantId: 'guest', claims, enableCae: true }),
+    ).resolves.toMatchObject({ token: 'workload-token' })
+    expect(requests[0]?.url).toBe('https://login.microsoftonline.com/guest/oauth2/v2.0/token')
+    expect(JSON.parse(requests[0]?.form['claims'] ?? '')).toStrictEqual({
+      access_token: {
+        nbf: { essential: true, value: '1700000000' },
+        xms_cc: { values: ['cp1'] },
+      },
+    })
+  })
+
+  test('moves on to managed identity, which ignores the per-call options, when workload identity refuses the tenant', async () => {
+    await useWorkloadIdentityEnvironment()
+    const fetchMock = createFetchMock([
+      (url) => {
+        expect(url).toMatch(appServiceIdentityUrl)
+        expect([...new URL(url).searchParams.keys()]).toStrictEqual(['api-version', 'resource'])
+        return jsonResponse({ access_token: 'mi-token', expires_in: 3600 })
+      },
+    ])
+
+    await expect(
+      new DefaultAzureCredential({ fetch: fetchMock }).getToken(scope, {
+        tenantId: 'guest',
+        claims,
+        enableCae: true,
+      }),
+    ).resolves.toMatchObject({ token: 'mi-token' })
+  })
+
+  test('answers claims with re-login commands for Azure CLI and Azure PowerShell, even with a cached token', async () => {
+    const calls = await installCommands({ az: printToken('cli-token'), pwsh: printToken('ps') })
+    const credential = new DefaultAzureCredential({
+      fetch: createFetchMock([imdsUnavailable, imdsUnavailable, imdsUnavailable]),
+    })
+    await expect(credential.getToken(scope)).resolves.toMatchObject({ token: 'cli-token' })
+
+    const withoutTenant = credential.getToken(scope, { claims })
+    await expect(withoutTenant).rejects.toBeInstanceOf(TokenUnavailableError)
+    await expect(withoutTenant).rejects.toThrow(
+      `az login --claims-challenge ${encodedClaims} --scope ${scope} or Connect-AzAccount -ClaimsChallenge ${encodedClaims}`,
+    )
+    await expect(credential.getToken(scope, { claims, tenantId: 'contoso' })).rejects.toThrow(
+      `az login --claims-challenge ${encodedClaims} --scope ${scope} --tenant contoso or Connect-AzAccount -ClaimsChallenge ${encodedClaims} -Tenant contoso`,
+    )
+    await expect(calls()).resolves.toHaveLength(1)
+  })
+
+  test('requests an allowed per-call tenant from Azure CLI', async () => {
+    const calls = await installCommands({ az: printToken('cli-token') })
+    const credential = new DefaultAzureCredential({
+      tenantId: 'home',
+      additionallyAllowedTenants: ['guest'],
+      fetch: createFetchMock([imdsUnavailable]),
+    })
+
+    await credential.getToken(scope, { tenantId: 'guest' })
+
+    await expect(calls()).resolves.toStrictEqual([
+      'az account get-access-token --output json --scope scope/.default --tenant guest',
+    ])
+  })
+
+  test('cancels the IMDS probe without trying developer credentials', async () => {
+    const calls = await installCommands({ az: printToken('cli-token') })
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const signal = init?.signal
+      await new Promise((resolve) => {
+        signal?.addEventListener('abort', resolve)
+      })
+      signal?.throwIfAborted()
+      return jsonResponse({})
+    })
+    const controller = new AbortController()
+    const reason = new Error('cancelled default credential')
+
+    const token = new DefaultAzureCredential({ fetch: fetchMock }).getToken(scope, {
+      abortSignal: controller.signal,
+    })
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+    controller.abort(reason)
+
+    await expect(token).rejects.toBe(reason)
+    await expect(vi.waitFor(() => fetchMock.mock.calls[0]?.[1]?.signal?.aborted)).resolves.toBe(
+      true,
+    )
+    await expect(calls()).resolves.toStrictEqual([])
   })
 })
 

@@ -5,7 +5,7 @@ export type {
   AzureRequestInit,
   AzureRequestOverrides,
 } from './client'
-export type { AccessToken } from './types'
+export type { AccessToken, GetTokenOptions, TokenCredential } from './types'
 export { getServicePrincipalToken } from './service-principal'
 export { getManagedIdentityToken } from './managed-identity'
 export {

@@ -9,6 +9,13 @@ import {
   isWindows,
   readTextFile,
 } from './internal/runtime'
+import {
+  claimsLoginInstructions,
+  environmentAllowedTenants,
+  requireTenantId,
+  resolveTenant,
+  tokenRequestClaims,
+} from './internal/token-options'
 import { sanitizeAuthorityHost } from './internal/url'
 import { getManagedIdentityToken } from './managed-identity'
 import { getServicePrincipalToken } from './service-principal'
@@ -19,6 +26,11 @@ export interface DefaultAzureCredentialOptions {
   authorityHost?: string
   /** Tenant for workload identity, Azure CLI and Azure PowerShell. */
   tenantId?: string
+  /**
+   * Tenants besides the configured one that `getToken` may request; `*` allows any tenant.
+   * The environment service principal falls back to AZURE_ADDITIONALLY_ALLOWED_TENANTS.
+   */
+  additionallyAllowedTenants?: string[]
   managedIdentityClientId?: string
   fetch?: typeof globalThis.fetch
 }
@@ -32,30 +44,49 @@ export interface DeveloperAzureCredentialOptions {
   abortSignal?: AbortSignal
 }
 
+/** Per-call options of one chain run; the credential has validated the tenant. */
+export interface ChainRequest {
+  tenantId?: string
+  claims?: string
+  enableCae?: boolean
+  signal?: AbortSignal
+}
+
 // Azure CLI runs through the Windows shell, so scopes are limited to characters it doesn't interpret.
 const safeCommandScope = /^[\w.:/-]+$/u
-// The tenant also reaches the Windows shell and a PowerShell script.
-const safeTenantId = /^[\w.-]+$/u
 
 export async function getDefaultAzureCredentialToken(
   options: DefaultAzureCredentialTokenOptions,
 ): Promise<AccessToken> {
+  return await acquireDefaultAzureCredentialToken(options, {})
+}
+
+export async function acquireDefaultAzureCredentialToken(
+  options: DefaultAzureCredentialTokenOptions,
+  request: ChainRequest,
+): Promise<AccessToken> {
   const scopes = resolveRequiredScopes(options.scope)
-  if (options.tenantId !== undefined && !safeTenantId.test(options.tenantId)) {
-    throw new TypeError('tenantId may only contain letters, digits and _ . -')
+  if (options.tenantId !== undefined) {
+    requireTenantId(options.tenantId)
   }
 
+  const { signal } = request
   const tenantId = getEnv('AZURE_TENANT_ID')
   const clientId = getEnv('AZURE_CLIENT_ID')
   const clientSecret = getEnv('AZURE_CLIENT_SECRET')
 
+  // A configured environment service principal ends the chain, also when it refuses the tenant.
   if (tenantId !== undefined && clientId !== undefined && clientSecret !== undefined) {
+    const allowedTenants = options.additionallyAllowedTenants ?? environmentAllowedTenants()
     return await getServicePrincipalToken({
-      tenantId,
+      tenantId: resolveTenant(tenantId, request.tenantId, allowedTenants) ?? tenantId,
       clientId,
       clientSecret,
       scope: scopes,
       authorityHost: options.authorityHost,
+      abortSignal: signal,
+      claims: request.claims,
+      enableCae: request.enableCae,
       fetch: options.fetch,
     })
   }
@@ -69,13 +100,22 @@ export async function getDefaultAzureCredentialToken(
     workloadClientId !== undefined &&
     federatedTokenFile !== undefined
   ) {
-    return await getWorkloadIdentityToken(
-      workloadTenantId,
-      workloadClientId,
-      federatedTokenFile,
-      scopes,
-      options,
+    const workloadToken = await unlessUnavailable(
+      async () =>
+        await getWorkloadIdentityToken(
+          resolveTenant(workloadTenantId, request.tenantId, options.additionallyAllowedTenants) ??
+            workloadTenantId,
+          workloadClientId,
+          federatedTokenFile,
+          scopes,
+          options,
+          request,
+        ),
+      signal,
     )
+    if (workloadToken !== undefined) {
+      return workloadToken
+    }
   }
 
   const [scope] = scopes
@@ -85,16 +125,30 @@ export async function getDefaultAzureCredentialToken(
         await getManagedIdentityToken({
           scope,
           clientId: options.managedIdentityClientId,
+          abortSignal: signal,
           fetch: options.fetch,
         }),
+      signal,
     )
     if (managedIdentityToken !== undefined) {
       return managedIdentityToken
     }
   }
 
+  if (request.claims !== undefined) {
+    throw new TokenUnavailableError(
+      `Could not find available credentials. ${claimsLoginInstructions(request.claims, scopes, request.tenantId)}`,
+    )
+  }
+
   const developerToken = await unlessUnavailable(
-    async () => await getDeveloperToken(scopes, undefined, options.tenantId),
+    async () =>
+      await getDeveloperToken(
+        scopes,
+        signal,
+        resolveTenant(options.tenantId, request.tenantId, options.additionallyAllowedTenants),
+      ),
+    signal,
   )
   if (developerToken !== undefined) {
     return developerToken
@@ -123,6 +177,7 @@ async function getDeveloperToken(
 
   const cliToken = await unlessUnavailable(
     async () => await getAzureCliToken(scopes, signal, tenantId),
+    signal,
   )
   if (cliToken !== undefined) {
     return cliToken
@@ -130,6 +185,7 @@ async function getDeveloperToken(
 
   const powerShellToken = await unlessUnavailable(
     async () => await getAzurePowerShellToken(scopes, signal, tenantId),
+    signal,
   )
   if (powerShellToken !== undefined) {
     return powerShellToken
@@ -146,7 +202,9 @@ async function getWorkloadIdentityToken(
   tokenFile: string,
   scopes: string[],
   options: DefaultAzureCredentialOptions,
+  { claims, enableCae, signal }: ChainRequest,
 ): Promise<AccessToken> {
+  const requestClaims = tokenRequestClaims(claims, enableCae)
   // Kubernetes rotates the projected token in place, so read it for every request.
   const assertion = (await readTextFile(tokenFile)).trim()
   const authorityHost = sanitizeAuthorityHost(
@@ -162,7 +220,9 @@ async function getWorkloadIdentityToken(
         client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
         grant_type: 'client_credentials',
         scope: scopes.join(' '),
+        ...(requestClaims === undefined ? {} : { claims: requestClaims }),
       }),
+      signal,
     },
     options.fetch ?? defaultFetch,
   )
@@ -172,10 +232,13 @@ async function getWorkloadIdentityToken(
 
 async function unlessUnavailable(
   acquire: () => Promise<AccessToken>,
+  signal: AbortSignal | undefined,
 ): Promise<AccessToken | undefined> {
   try {
     return await acquire()
   } catch (error) {
+    // A cancelled request must not move on to the next credential.
+    signal?.throwIfAborted()
     if (error instanceof TokenUnavailableError) {
       return undefined
     }

@@ -9,6 +9,7 @@ export interface ManagedIdentityOptions {
   clientId?: string
   objectId?: string
   resourceId?: string
+  abortSignal?: AbortSignal
   fetch?: typeof globalThis.fetch
 }
 
@@ -34,6 +35,8 @@ export async function getManagedIdentityToken(
     throw new TypeError('Specify at most one of clientId, objectId, or resourceId')
   }
 
+  const { abortSignal: signal } = options
+  signal?.throwIfAborted()
   const resource = scope.slice(0, -'/.default'.length)
   const fetcher = options.fetch ?? defaultFetch
   const identityEndpoint = getEnv('IDENTITY_ENDPOINT')
@@ -44,7 +47,7 @@ export async function getManagedIdentityToken(
     const url = tokenUrl(identityEndpoint, '2019-08-01', resource, options, 'mi_res_id')
     return await requestToken(
       url,
-      { headers: { Metadata: 'true', 'X-IDENTITY-HEADER': identityHeader } },
+      { headers: { Metadata: 'true', 'X-IDENTITY-HEADER': identityHeader }, signal },
       fetcher,
     )
   }
@@ -62,6 +65,7 @@ export async function getManagedIdentityToken(
         method: 'POST',
         headers: { Metadata: 'true' },
         body: new URLSearchParams({ resource, 'api-version': '2017-09-01' }),
+        signal,
       },
       fetcher,
     )
@@ -69,9 +73,9 @@ export async function getManagedIdentityToken(
 
   const imdsHost = getEnv('AZURE_POD_IDENTITY_AUTHORITY_HOST') ?? 'http://169.254.169.254'
   const imdsEndpoint = `${imdsHost}/metadata/identity/oauth2/token`
-  await probeImds(imdsEndpoint, fetcher)
+  await probeImds(imdsEndpoint, fetcher, signal)
   const url = tokenUrl(imdsEndpoint, '2018-02-01', resource, options, 'msi_res_id')
-  return await requestToken(url, { headers: { Metadata: 'true' } }, fetcher)
+  return await requestToken(url, { headers: { Metadata: 'true' }, signal }, fetcher)
 }
 
 function tokenUrl(
@@ -98,11 +102,19 @@ function tokenUrl(
 }
 
 /** IMDS answers a request without the metadata header immediately, so any response proves it is reachable. */
-async function probeImds(endpoint: string, fetcher: typeof globalThis.fetch): Promise<void> {
+async function probeImds(
+  endpoint: string,
+  fetcher: typeof globalThis.fetch,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const timeout = AbortSignal.timeout(imdsProbeTimeoutMs)
   try {
-    const response = await fetcher(endpoint, { signal: AbortSignal.timeout(imdsProbeTimeoutMs) })
+    const response = await fetcher(endpoint, {
+      signal: signal === undefined ? timeout : AbortSignal.any([signal, timeout]),
+    })
     await response.body?.cancel()
   } catch (error) {
+    signal?.throwIfAborted()
     throw new TokenUnavailableError('IMDS endpoint unavailable', error)
   }
 }
@@ -116,6 +128,7 @@ async function requestToken(
   try {
     payload = await fetchJson(url, init, fetcher)
   } catch (error) {
+    init.signal?.throwIfAborted()
     if (error instanceof TokenRequestError && error.status !== undefined && error.status < 500) {
       throw error
     }

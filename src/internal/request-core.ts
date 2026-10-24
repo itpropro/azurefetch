@@ -1,4 +1,4 @@
-import type { AccessToken } from '../types'
+import type { TokenCredential } from '../types'
 import { formatAuthorizationHeader } from './token'
 
 export const storageOAuthScope = 'https://storage.azure.com/.default'
@@ -7,10 +7,6 @@ export const appConfigurationOAuthScope = 'https://appconfig.azure.com/.default'
 
 interface HeaderCredential {
   getAuthorizationHeader: (scope?: string | string[]) => Promise<string>
-}
-
-interface TokenCredential {
-  getToken: (scopes: string | string[]) => Promise<AccessToken | null>
 }
 
 export type AzureRequestCredential = HeaderCredential | TokenCredential
