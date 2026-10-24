@@ -143,6 +143,21 @@ describe('TableClient', () => {
     })
   })
 
+  test('keeps the service keys when an entity also has lowercase key properties', async () => {
+    const fetcher = createFetchMock([
+      () => jsonResponse({ PartitionKey: 'pk', RowKey: 'rk', partitionKey: 'x', rowKey: 'y' }),
+      (url) => {
+        expect(new URL(url).pathname).toBe("/mytable(PartitionKey='pk',RowKey='rk')")
+        return textResponse('', 204)
+      },
+    ])
+    const table = anonymousTable(fetcher)
+
+    const entity = await table.getEntity('pk', 'rk')
+    expect(entity).toMatchObject({ partitionKey: 'pk', rowKey: 'rk' })
+    await table.upsertEntity(entity!)
+  })
+
   test('returns undefined for a missing entity', async () => {
     const fetcher = createFetchMock([() => textResponse('', 404)])
 

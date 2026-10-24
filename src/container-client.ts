@@ -35,10 +35,13 @@ export class ContainerClient {
   }
 
   public getBlockBlobClient(blobName: string): BlockBlobClient {
-    const path = blobName
-      .split('/')
-      .map((segment) => encodeURIComponent(segment))
-      .join('/')
+    const segments = blobName.split('/')
+    // URLs resolve dot segments, which would address a blob outside this container.
+    if (segments.some((segment) => segment === '.' || segment === '..')) {
+      throw new TypeError(`Blob name must not contain "." or ".." path segments: ${blobName}`)
+    }
+
+    const path = segments.map((segment) => encodeURIComponent(segment)).join('/')
     return new BlockBlobClient(appendUrlPath(this.url, path), this.credential, this.options)
   }
 

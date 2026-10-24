@@ -257,6 +257,25 @@ describe('BlockBlobClient', () => {
   })
 })
 
+describe('ContainerClient.getBlockBlobClient', () => {
+  test.each(['../other/victim', 'dir/./file.json', '..'])(
+    'rejects the dot segments of %s before sending anything',
+    (blobName) => {
+      const container = new BlobServiceClient(accountUrl).getContainerClient('container')
+
+      expect(() => container.getBlockBlobClient(blobName)).toThrow('"." or ".." path segments')
+    },
+  )
+
+  test('keeps nested names and dots inside segments', () => {
+    const container = new BlobServiceClient(accountUrl).getContainerClient('container')
+
+    expect(container.getBlockBlobClient('dir/.config/file.json').url).toBe(
+      `${accountUrl}/container/dir/.config/file.json`,
+    )
+  })
+})
+
 describe('ContainerClient.listBlobsFlat', () => {
   test('caps maxPageSize to the service limit', async () => {
     const fetcher = createFetchMock([

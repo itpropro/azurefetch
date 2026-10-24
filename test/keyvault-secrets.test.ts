@@ -250,6 +250,36 @@ describe('KeyVaultSecretClient', () => {
     ])
   })
 
+  test('continues a version listing on its own path', async () => {
+    const fetcher = createFetchMock([
+      (url) => {
+        const { pathname, searchParams } = new URL(url)
+        expect(pathname).toBe('/secrets/app-secret/versions')
+        expect(searchParams.get('$skiptoken')).toBe('next')
+        return jsonResponse({ value: [] })
+      },
+    ])
+
+    const pages = createClient(fetcher)
+      .listPropertiesOfSecretVersions('app-secret')
+      .byPage({ continuationToken: `${vaultUrl}/secrets/app-secret/versions?$skiptoken=next` })
+
+    await expect(collect(pages)).resolves.toHaveLength(1)
+  })
+
+  test('rejects continuation links to another secret before sending a request', async () => {
+    const fetcher = vi.fn<typeof fetch>()
+
+    await expect(
+      collect(
+        createClient(fetcher)
+          .listPropertiesOfSecretVersions('app-secret')
+          .byPage({ continuationToken: `${vaultUrl}/secrets/other/versions?$skiptoken=next` }),
+      ),
+    ).rejects.toThrow('continue the same listing')
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
   test('rejects continuation links to another origin before sending a request', async () => {
     const fetcher = vi.fn<typeof fetch>()
 

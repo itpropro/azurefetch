@@ -196,7 +196,7 @@ export class KeyVaultSecretClient {
   ): PagedAsyncIterableIterator<T, SecretPage<T>> {
     return pagedItems((settings: PageSettings = {}) =>
       paginate(async (link) => {
-        const payload = await this.send('GET', this.pageUrl(link ?? url), options)
+        const payload = await this.send('GET', this.pageUrl(link ?? url, url), options)
         const items = jsonProperty(payload, 'value')
         const nextLink = readString(payload, 'nextLink')
         const continuationToken = nextLink === '' ? undefined : nextLink
@@ -224,11 +224,15 @@ export class KeyVaultSecretClient {
     return this.secretUrl(name, undefined, 'deletedsecrets')
   }
 
-  /** Continuation links come from the service; they must stay on the configured vault. */
-  private pageUrl(link: string): string {
+  /** Continuation links must stay on the configured vault and continue the same listing. */
+  private pageUrl(link: string, listUrl: string): string {
     const url = new URL(link, `${this.url}/`)
     if (url.origin !== new URL(this.url).origin) {
       throw new TypeError('Key Vault continuation URL must match the configured vault origin')
+    }
+
+    if (url.pathname !== new URL(listUrl).pathname) {
+      throw new TypeError('Key Vault continuation URL must continue the same listing')
     }
 
     return url.toString()
