@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/itpropro/azurefetch/compare/v0.6.0...v0.6.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* **release:** ship the MIT license in the npm package ([f37202b](https://github.com/itpropro/azurefetch/commit/f37202b8af3dccf981b26be4fc5f04556b2df68b))
+
 ## [0.6.0](https://github.com/itpropro/azurefetch/compare/v0.5.0...v0.6.0) (2026-10-24)
 
 
