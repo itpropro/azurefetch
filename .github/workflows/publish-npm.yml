@@ -111,10 +111,12 @@ jobs:
             | .[0].value
             | .name == "azurefetch"
             and ([.files[].path | select(
-              . != "README.md"
+              . != "LICENSE"
+              and . != "README.md"
               and . != "package.json"
               and (startswith("dist/") | not)
             )] | length == 0)
+            and ([.files[].path] | index("LICENSE") != null)
             and ([.files[].path] | index("README.md") != null)
             and ([.files[].path] | index("package.json") != null)
             and ([.files[].path | select(startswith("dist/"))] | length > 0)
@@ -213,7 +215,7 @@ jobs:
             [[ "$entry" != *'/../'* ]]
             [[ "$entry" != *'/./'* ]]
             case "$entry" in
-              package/README.md | package/package.json | package/dist/*) ;;
+              package/LICENSE | package/README.md | package/package.json | package/dist/*) ;;
               *)
                 echo "Unexpected package entry: $entry" >&2
                 exit 1
