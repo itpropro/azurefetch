@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.2](https://github.com/itpropro/azurefetch/compare/v0.6.1...v0.6.2) (2026-10-25)
+
+
+### Bug Fixes
+
+* **core:** trim and parse configuration input in linear time ([d6f7bf1](https://github.com/itpropro/azurefetch/commit/d6f7bf10028647eeb9601a1a6c1564e7b40488b8))
+* **core:** trim and parse configuration input in linear time ([#62](https://github.com/itpropro/azurefetch/issues/62)) ([75b9d0e](https://github.com/itpropro/azurefetch/commit/75b9d0eb106f6714e2461537fed5289b2ac5a2d9))
+
 ## [0.6.1](https://github.com/itpropro/azurefetch/compare/v0.6.0...v0.6.1) (2026-10-25)
 
 
