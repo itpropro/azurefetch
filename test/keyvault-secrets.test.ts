@@ -150,6 +150,15 @@ describe('KeyVaultSecretClient', () => {
     })
   })
 
+  test('drops trailing slashes from the vault URL in linear time', () => {
+    // An end-anchored regex backtracks quadratically on a long inner run of slashes.
+    const path = `${'/'.repeat(200_000)}vault`
+
+    expect(new KeyVaultSecretClient(`https://proxy.example${path}//`).url).toBe(
+      `https://proxy.example${path}`,
+    )
+  })
+
   test('purgeDeletedSecret deletes the deleted secret', async () => {
     const fetcher = createFetchMock([
       (url, init) => {

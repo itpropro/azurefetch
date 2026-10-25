@@ -6,16 +6,15 @@ import { pagedItems, paginate } from './internal/paging'
 import type { PagedAsyncIterableIterator, PageSettings } from './internal/paging'
 import { appConfigurationOAuthScope } from './internal/request-core'
 import { jsonRequestError } from './internal/request-error'
+import { parseConnectionString, stripSurrounding } from './internal/text'
 import { normalizeServiceUrl } from './internal/url'
 
 const defaultApiVersion = '2023-11-01'
 const settingContentType = 'application/vnd.microsoft.appconfig.kv+json'
 const settingAccept = 'application/vnd.microsoft.appconfig.kv+json, application/problem+json'
 const listAccept = 'application/vnd.microsoft.appconfig.kvset+json, application/problem+json'
-const connectionStringPattern = /Endpoint=(.*);Id=(.*);Secret=(.*)/u
 const syncTokenPattern = /^([^=]+)=([^;]+);sn=(\d+)$/u
 const reservedFilterCharacter = /([\\*,])/gu
-const surroundingColons = /^:+|:+$/gu
 
 export interface AppConfigurationClientOptions extends Omit<AzureRequestOverrides, 'credential'> {
   fetch?: typeof globalThis.fetch
@@ -77,7 +76,8 @@ export class AppConfigurationClient {
   ) {
     this.url = normalizeServiceUrl(endpoint, 'endpoint')
     this.apiVersion = options.apiVersion ?? defaultApiVersion
-    const prefix = options.prefix?.trim().replaceAll(surroundingColons, '')
+    const prefix =
+      options.prefix === undefined ? undefined : stripSurrounding(options.prefix.trim(), ':')
     this.prefix = prefix === '' ? undefined : prefix
     this.defaultLabel = options.label
     this.client = new AzureClient({
@@ -93,9 +93,11 @@ export class AppConfigurationClient {
     connectionString: string,
     options: Omit<AppConfigurationClientOptions, 'scope' | 'authorityHost'> = {},
   ): AppConfigurationClient {
-    const [, endpoint = '', id = '', secret = ''] =
-      connectionStringPattern.exec(connectionString) ?? []
-    if (endpoint === '') {
+    const parts = parseConnectionString(connectionString)
+    const endpoint = parts.get('Endpoint') ?? ''
+    const id = parts.get('Id')
+    const secret = parts.get('Secret')
+    if (endpoint === '' || id === undefined || secret === undefined) {
       throw new Error('Invalid connection string. Expected Endpoint=…;Id=…;Secret=…')
     }
 

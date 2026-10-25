@@ -1,10 +1,10 @@
-const trailingSlashes = /\/+$/u
+import { stripTrailing } from './text'
 
 export function sanitizeAuthorityHost(authorityHost: string): string {
   const trimmed = authorityHost.trim()
   requireHttpsUrl(trimmed, 'authorityHost')
 
-  return trimmed.replace(trailingSlashes, '')
+  return stripTrailing(trimmed, '/')
 }
 
 export function requireHttpsUrl(input: string, name: string): URL {
@@ -19,5 +19,5 @@ export function requireHttpsUrl(input: string, name: string): URL {
 /** HTTPS service endpoint without trailing slashes, query or fragment. */
 export function normalizeServiceUrl(input: string, name: string): string {
   const url = requireHttpsUrl(input, name)
-  return `${url.origin}${url.pathname.replace(trailingSlashes, '')}`
+  return `${url.origin}${stripTrailing(url.pathname, '/')}`
 }

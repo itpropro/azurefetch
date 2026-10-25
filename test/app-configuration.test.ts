@@ -33,6 +33,20 @@ describe('AppConfigurationClient', () => {
     ).toThrow('endpoint must use HTTPS')
   })
 
+  test('reads connection string segments in any order', () => {
+    expect(
+      AppConfigurationClient.fromConnectionString(`Secret=AQID;Endpoint=${endpoint};Id=test-id`)
+        .url,
+    ).toBe(endpoint)
+  })
+
+  test('rejects a malformed connection string in linear time', () => {
+    // Greedy regex groups backtrack quadratically on many repeated `;Id=` segments.
+    expect(() =>
+      AppConfigurationClient.fromConnectionString(`Endpoint=;Id=${';Id=a'.repeat(80_000)}`),
+    ).toThrow('Invalid connection string')
+  })
+
   test.each([
     { cloud: 'public', url: endpoint, scope: 'https://appconfig.azure.com/.default' },
     {
@@ -132,6 +146,25 @@ describe('AppConfigurationClient', () => {
       etag: '"etag-1"',
       tags: { env: 'dev' },
     })
+  })
+
+  test('trims colons around the prefix in linear time', async () => {
+    // An end-anchored regex backtracks quadratically on a long inner run of colons.
+    const prefix = `app${':'.repeat(200_000)}01`
+    const fetcher = createFetchMock([
+      (url) => {
+        expect(url).toBe(
+          `${endpoint}/kv/${encodeURIComponent(`${prefix}:plain`)}?api-version=2023-11-01`,
+        )
+        return jsonResponse({ key: `${prefix}:plain`, value: 'value' })
+      },
+    ])
+    const client = new AppConfigurationClient(endpoint, bearer, {
+      fetch: fetcher,
+      prefix: `::${prefix}::`,
+    })
+
+    await expect(client.getConfigurationSetting('plain')).resolves.toMatchObject({ key: 'plain' })
   })
 
   test('setConfigurationSetting encodes special key characters and keeps unicode values', async () => {

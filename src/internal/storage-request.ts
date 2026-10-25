@@ -10,6 +10,7 @@ import type { AzureRequestCredential, RetryOptions } from './request-core'
 import { defaultFetch } from './runtime'
 import { encodeUtf8 } from './storage-encoding'
 import { getAccountNameFromUrl } from './storage-url'
+import { parseConnectionString } from './text'
 
 export const storageServiceVersion = '2024-11-04'
 
@@ -118,16 +119,7 @@ export function parseStorageConnectionString(
   connectionString: string,
   service: 'blob' | 'table',
 ): { url: string; credential?: StorageSharedKeyCredential } {
-  const parts = new Map(
-    connectionString
-      .split(';')
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0)
-      .map((part): [string, string] => {
-        const separator = part.indexOf('=')
-        return separator === -1 ? [part, ''] : [part.slice(0, separator), part.slice(separator + 1)]
-      }),
-  )
+  const parts = parseConnectionString(connectionString)
   const endpointKey = service === 'blob' ? 'BlobEndpoint' : 'TableEndpoint'
   const endpoint = nonEmpty(parts.get(endpointKey)?.replace(trailingSlash, ''))
   const accountName =
