@@ -234,6 +234,8 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.19.0
+          # npm's OIDC exchange replaces the placeholder token setup-node writes for this registry.
+          registry-url: https://registry.npmjs.org
 
       - name: Set up npm
         run: npm install --global npm@12.0.2 --ignore-scripts
