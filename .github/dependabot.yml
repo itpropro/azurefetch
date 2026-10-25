@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # Keeps the SHA-pinned actions current; JavaScript dependencies are upgraded with taze.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: ci(deps)

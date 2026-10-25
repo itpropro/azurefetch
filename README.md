@@ -364,4 +364,4 @@ Malformed CLI output and cancellation are terminal. Azure PowerShell is not atte
 
 ## License
 
-MIT
+[MIT](LICENSE)
