@@ -49,7 +49,12 @@ export class AzureClient {
     // `Request` turns every body into a stream, so replayability is decided on the original body.
     const body = requestInit.body ?? (input instanceof Request ? input.body : null)
     const replayable = isReplayableBody(body)
-    const request = new Request(input, requestInit)
+    const defaultRedirect =
+      input instanceof Request && input.redirect === 'error' ? 'error' : 'manual'
+    const request = new Request(input, {
+      ...requestInit,
+      redirect: requestInit.redirect ?? defaultRedirect,
+    })
     const credential =
       azure.credential ??
       this.options.credential ??
@@ -59,6 +64,7 @@ export class AzureClient {
     if ('signRequest' in credential) {
       await credential.signRequest(request)
     } else {
+      requireHttpsUrl(request.url, 'Azure request URL')
       request.headers.set('Authorization', await getAuthorizationHeader(credential, scope))
     }
 

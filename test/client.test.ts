@@ -50,8 +50,19 @@ describe('AzureClient', () => {
 
     const request = sentRequest(fetcher)
     expect(request.method).toBe('POST')
+    expect(request.redirect).toBe('manual')
     expect(request.headers.get('Authorization')).toBe(expected)
     expect(getToken).toHaveBeenCalledWith(['https://storage.azure.com/.default'])
+  })
+
+  test('only requests token credentials for HTTPS service URLs', async () => {
+    const getAuthorizationHeader = vi.fn<() => Promise<string>>(async () => 'Bearer local-test')
+    const fetcher = recordingFetch()
+    const client = new AzureClient({ credential: { getAuthorizationHeader }, fetch: fetcher })
+
+    await expect(client.fetch('http://example.test')).rejects.toThrow('must use HTTPS')
+    expect(getAuthorizationHeader).not.toHaveBeenCalled()
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   test('prefers getAuthorizationHeader over getToken on mixed credentials', async () => {

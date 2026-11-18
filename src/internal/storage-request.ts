@@ -11,6 +11,7 @@ import { defaultFetch } from './runtime'
 import { encodeUtf8 } from './storage-encoding'
 import { getAccountNameFromUrl } from './storage-url'
 import { parseConnectionString } from './text'
+import { requireHttpsUrl } from './url'
 
 export const storageServiceVersion = '2024-11-04'
 
@@ -96,7 +97,8 @@ export class StorageTransport {
 
     const requestUrl = validatedUrl(url, { method, headers })
     return await sendWithRetry(
-      async () => await this.fetcher(requestUrl, { method, headers, body: init.body }),
+      async () =>
+        await this.fetcher(requestUrl, { method, headers, body: init.body, redirect: 'manual' }),
       { ...this.retryOptions, body: init.body },
     )
   }
@@ -109,6 +111,7 @@ export class StorageTransport {
         await this.protocol.sign({ method, url, headers }, this.credential),
       )
     } else if (this.credential !== undefined) {
+      requireHttpsUrl(url.href, 'Storage request URL')
       headers.set('Authorization', await getAuthorizationHeader(this.credential, storageOAuthScope))
     }
   }
