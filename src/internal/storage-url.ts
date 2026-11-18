@@ -32,8 +32,17 @@ export function normalizeStorageUrl(rawUrl: string): string {
 
 /** Checks the supplied path before the URL parser can remove a segment. */
 export function rejectStorageUrlDotSegments(rawUrl: string): void {
+  // The URL parser trims ASCII space and C0 controls from the ends.
+  let start = 0
+  let end = rawUrl.length
+  while (start < end && (rawUrl.codePointAt(start) ?? Infinity) <= 0x20) {
+    start++
+  }
+  while (end > start && (rawUrl.codePointAt(end - 1) ?? Infinity) <= 0x20) {
+    end--
+  }
   const [urlPath = ''] = rawUrl
-    .trim()
+    .slice(start, end)
     .replaceAll(/[\t\r\n]/gu, '')
     .split(urlPathEnd, 1)
   if (dotPathSegment.test(urlPath)) {
