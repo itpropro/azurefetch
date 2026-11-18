@@ -18,9 +18,10 @@ export interface BlobBatchSubmitResponse {
 }
 
 const contentIdPattern = /^content-id:[\t ]*(\d+)[\t ]*$/imu
-const statusLinePattern = /^HTTP\/1\.1 (\d{3})/mu
+const statusLinePattern = /^HTTP\/1\.1 (\d{3})(?:[ \r\n]|$)/u
 const errorCodePattern = /^x-ms-error-code:\s*(\S+)/imu
 const boundaryPattern = /boundary=([^;\s]+)/u
+const headerSeparator = /\r?\n\r?\n/u
 
 export class BlobBatchClient {
   private readonly url: string
@@ -107,9 +108,10 @@ function parseSubResponses(
   expected: number,
 ): BlobBatchSubResponse[] {
   const subResponses: BlobBatchSubResponse[] = []
-  for (const part of body.split(`--${boundary}`)) {
-    const contentId = contentIdPattern.exec(part)?.[1]
-    const status = statusLinePattern.exec(part)?.[1]
+  for (const part of body.split(`--${boundary}`).slice(1)) {
+    const [mimeHeaders = '', response = ''] = part.split(headerSeparator, 2)
+    const contentId = contentIdPattern.exec(mimeHeaders)?.[1]
+    const status = statusLinePattern.exec(response)?.[1]
     if (contentId !== undefined && status !== undefined) {
       const index = Number(contentId)
       if (index >= expected || subResponses[index] !== undefined) {
@@ -117,7 +119,7 @@ function parseSubResponses(
       }
       subResponses[index] = {
         status: Number(status),
-        errorCode: errorCodePattern.exec(part)?.[1],
+        errorCode: errorCodePattern.exec(response)?.[1],
       }
     }
   }
