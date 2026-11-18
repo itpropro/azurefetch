@@ -60,7 +60,15 @@ export async function executeCommand(
     const child = childProcess.execFile(
       command,
       args,
-      { signal: options.signal, shell: options.shell, windowsHide: true },
+      {
+        signal: options.signal,
+        shell: options.shell,
+        windowsHide: true,
+        env:
+          options.shell === true
+            ? { ...runtime.process?.env, NoDefaultCurrentDirectoryInExePath: '1' }
+            : undefined,
+      },
       (error, stdout) => {
         resolve({ error, stdout })
       },

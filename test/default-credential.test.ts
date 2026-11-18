@@ -857,12 +857,15 @@ describe('getDeveloperAzureCredentialToken', () => {
     await expect(calls()).resolves.toHaveLength(1)
   })
 
-  test('rejects scopes that the Windows shell would interpret', async () => {
-    const calls = await installCommands({ az: printToken('cli-token') })
+  test.each(['https://resource/.default&calc', '-fixture'])(
+    'rejects a developer scope containing command syntax',
+    async (invalidScope) => {
+      const calls = await installCommands({ az: printToken('cli-token') })
 
-    await expect(
-      getDeveloperAzureCredentialToken({ scope: 'https://resource/.default&calc' }),
-    ).rejects.toBeInstanceOf(TypeError)
-    await expect(calls()).resolves.toStrictEqual([])
-  })
+      await expect(
+        getDeveloperAzureCredentialToken({ scope: invalidScope }),
+      ).rejects.toBeInstanceOf(TypeError)
+      await expect(calls()).resolves.toStrictEqual([])
+    },
+  )
 })
