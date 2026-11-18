@@ -44,7 +44,9 @@ export class BlobBatchClient {
       (url) => url.origin !== account.origin || !url.pathname.startsWith(accountPath),
     )
     if (foreign !== undefined) {
-      throw new TypeError(`Blob ${foreign.toString()} does not belong to ${this.url}`)
+      throw new TypeError(
+        `Blob ${foreign.origin}${foreign.pathname} does not belong to ${account.origin}${account.pathname}`,
+      )
     }
 
     const boundary = multipartBoundary('batch')

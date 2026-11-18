@@ -441,11 +441,13 @@ describe('BlobBatchClient.deleteBlobs', () => {
     },
   ])('rejects $blob before sending anything', async ({ account, blob }) => {
     const fetcher = vi.fn<typeof fetch>()
-    const client = new BlobServiceClient(account, undefined, { fetch: fetcher })
+    const client = new BlobServiceClient(`${account}?label=account`, undefined, { fetch: fetcher })
 
-    await expect(client.getBlobBatchClient().deleteBlobs([blob])).rejects.toThrow(
-      'does not belong to',
-    )
+    await expect(
+      client.getBlobBatchClient().deleteBlobs([`${blob}?label=blob`]),
+    ).rejects.toMatchObject({
+      message: `Blob ${blob} does not belong to ${new URL(account).origin}${new URL(account).pathname}`,
+    })
     expect(fetcher).not.toHaveBeenCalled()
   })
 })
