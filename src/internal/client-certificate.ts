@@ -57,14 +57,19 @@ export async function loadClientCertificate(
   }
 
   const digest = await crypto.subtle.digest('SHA-256', decodeBase64ToBytes(certificate))
-  const privateKey = await crypto.subtle.importKey(
-    'pkcs8',
-    await readPkcs8(key, password),
-    { name: 'RSA-PSS', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  )
-  return { thumbprint: encodeBase64Url(digest), chain, privateKey }
+  const keyBytes = await readPkcs8(key, password)
+  try {
+    const privateKey = await crypto.subtle.importKey(
+      'pkcs8',
+      keyBytes,
+      { name: 'RSA-PSS', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    )
+    return { thumbprint: encodeBase64Url(digest), chain, privateKey }
+  } finally {
+    keyBytes.fill(0)
+  }
 }
 
 /** Signs a PS256 client assertion that is valid for 10 minutes. */

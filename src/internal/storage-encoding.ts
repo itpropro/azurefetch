@@ -21,10 +21,22 @@ export function createHmacSigner(base64Key: string): (text: string) => Promise<s
   const keyBytes = decodeBase64ToBytes(base64Key)
   let key: Promise<CryptoKey> | undefined
 
+  async function importKey(): Promise<CryptoKey> {
+    try {
+      return await crypto.subtle.importKey(
+        'raw',
+        keyBytes,
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign'],
+      )
+    } finally {
+      keyBytes.fill(0)
+    }
+  }
+
   return async (text) => {
-    key ??= crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, [
-      'sign',
-    ])
+    key ??= importKey()
     return encodeBytesToBase64(await crypto.subtle.sign('HMAC', await key, encodeUtf8(text)))
   }
 }
