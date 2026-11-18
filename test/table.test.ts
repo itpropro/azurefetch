@@ -426,6 +426,7 @@ describe('TableClient', () => {
     expect(odata`${rowKey} eq RowKey`).toBe("'it''s' eq RowKey")
     expect(odata`RowKey eq '${'ab'}${'cd'}'`).toBe("RowKey eq 'abcd'")
     expect(odata`size eq ${2n}`).toBe('size eq 2L')
+    expect(odata`size eq ${2n}L`).toBe('size eq 2L')
     expect(() => odata`RowKey eq ${{ value: 'abc' }}`).toThrow('Unsupported OData literal')
   })
 

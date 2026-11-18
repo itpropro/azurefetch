@@ -2,6 +2,8 @@ import { storageRequestError } from './storage-request'
 import type { StorageTransport } from './storage-request'
 import { appendUrlPath } from './storage-url'
 
+const int64Suffix = /^[Ll]\b/u
+
 export interface TableCreateIfNotExistsResponse {
   succeeded: boolean
   errorCode?: string
@@ -31,13 +33,14 @@ export function odata(strings: TemplateStringsArray, ...values: unknown[]): stri
       quoted = !quoted
     }
     if (index < values.length) {
-      filter += odataLiteral(values[index], quoted)
+      const explicitInt64Suffix = int64Suffix.test(strings[index + 1] ?? '')
+      filter += odataLiteral(values[index], quoted, explicitInt64Suffix)
     }
   }
   return filter
 }
 
-function odataLiteral(value: unknown, quoted: boolean): string {
+function odataLiteral(value: unknown, quoted: boolean, explicitInt64Suffix: boolean): string {
   if (value instanceof Date) {
     const iso = Date.prototype.toISOString.call(value)
     return quoted ? iso : `datetime'${iso}'`
@@ -48,7 +51,7 @@ function odataLiteral(value: unknown, quoted: boolean): string {
     return quoted ? escaped : `'${escaped}'`
   }
   if (typeof value === 'bigint') {
-    return quoted ? String(value) : `${String(value)}L`
+    return quoted || explicitInt64Suffix ? String(value) : `${String(value)}L`
   }
 
   if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) {
