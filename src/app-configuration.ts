@@ -14,6 +14,7 @@ const settingContentType = 'application/vnd.microsoft.appconfig.kv+json'
 const settingAccept = 'application/vnd.microsoft.appconfig.kv+json, application/problem+json'
 const listAccept = 'application/vnd.microsoft.appconfig.kvset+json, application/problem+json'
 const syncTokenPattern = /^([^=]+)=([^;]+);sn=(\d+)$/u
+const syncTokenHeaderValue = /^[\u0020-\u007E\u0080-\u00FF]+$/u
 const reservedFilterCharacter = /([\\*,])/gu
 
 export interface AppConfigurationClientOptions extends Omit<AzureRequestOverrides, 'credential'> {
@@ -117,8 +118,12 @@ export class AppConfigurationClient {
       }
 
       const sequenceNumber = Number(sequence)
+      const headerValue = `${id}=${value}`
+      if (!Number.isSafeInteger(sequenceNumber) || !syncTokenHeaderValue.test(headerValue)) {
+        continue
+      }
       if ((this.syncTokens.get(id)?.sequenceNumber ?? -1) < sequenceNumber) {
-        this.syncTokens.set(id, { token: `${id}=${value}`, sequenceNumber })
+        this.syncTokens.set(id, { token: headerValue, sequenceNumber })
       }
     }
   }

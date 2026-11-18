@@ -289,6 +289,7 @@ describe('AppConfigurationClient', () => {
     const client = new AppConfigurationClient(endpoint, bearer, { fetch: fetcher })
 
     await client.getConfigurationSetting('plain')
+    client.updateSyncToken('a=fixture;sn=9007199254740992,d=日本語;sn=1')
     await client.getConfigurationSetting('plain')
     await client.getConfigurationSetting('plain')
     await client.getConfigurationSetting('plain')
