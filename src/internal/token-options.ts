@@ -5,6 +5,18 @@ import { encodeBytesToBase64, encodeUtf8 } from './storage-encoding'
 
 // The tenant also reaches URLs, the Windows shell and a PowerShell script.
 const safeTenantId = /^[\w.-]+$/u
+const safeDeveloperScope = /^(?!-)[\w.:/-]+$/u
+
+export function requireDeveloperInputs(scopes: string[], tenantId: string | undefined): void {
+  if (!scopes.every((scope) => safeDeveloperScope.test(scope))) {
+    throw new TypeError(
+      'Developer credential scopes may only contain letters, digits and _ . : / - and cannot begin with a dash',
+    )
+  }
+  if (tenantId?.startsWith('-') === true) {
+    throw new TypeError('Developer credential tenantId cannot begin with a dash')
+  }
+}
 
 export function requireTenantId(tenantId: string): string {
   if (!safeTenantId.test(tenantId)) {
@@ -103,6 +115,12 @@ export function claimsLoginInstructions(
   scopes: string[],
   tenantId: string | undefined,
 ): string {
+  if (
+    !scopes.every((scope) => safeDeveloperScope.test(scope)) ||
+    (tenantId !== undefined && (!safeTenantId.test(tenantId) || tenantId.startsWith('-')))
+  ) {
+    return 'Azure CLI and Azure PowerShell require signing in again with the claims challenge.'
+  }
   const encoded = encodeBytesToBase64(encodeUtf8(claims))
   const azureCli = `az login --claims-challenge ${encoded} --scope ${scopes.join(' ')}${tenantId === undefined ? '' : ` --tenant ${tenantId}`}`
   const powerShell = `Connect-AzAccount -ClaimsChallenge ${encoded}${tenantId === undefined ? '' : ` -Tenant ${tenantId}`}`

@@ -14,6 +14,7 @@ import {
 } from './internal/runtime'
 import {
   claimsLoginInstructions,
+  requireDeveloperInputs,
   environmentAllowedTenants,
   requireTenantId,
   resolveTenant,
@@ -57,8 +58,6 @@ export interface ChainRequest {
   signal?: AbortSignal
 }
 
-// Azure CLI runs through the Windows shell, so scopes are limited to characters it doesn't interpret.
-const safeCommandScope = /^[\w.:/-]+$/u
 const jwtBearerAssertionType = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
 const enabledFlag = /^(?:true|1)$/iu
 
@@ -193,6 +192,7 @@ async function getDeveloperToken(
   if (!hasCommandExecution()) {
     throw new TokenUnavailableError('Command execution is unavailable')
   }
+  requireDeveloperInputs(scopes, tenantId)
 
   const cliToken = await unlessUnavailable(
     async () => await getAzureCliToken(scopes, signal, tenantId),
@@ -374,12 +374,6 @@ async function getAzureCliToken(
   signal?: AbortSignal,
   tenantId?: string,
 ): Promise<AccessToken> {
-  if (!scopes.every((scope) => safeCommandScope.test(scope))) {
-    throw new TypeError(
-      'Developer credential scopes may only contain letters, digits and _ . : / -',
-    )
-  }
-
   let output: string
   try {
     output = await executeCommand(
