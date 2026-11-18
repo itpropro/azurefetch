@@ -57,6 +57,7 @@ export interface SetConfigurationSettingOptions extends AppConfigurationRequestO
 }
 
 export interface ListConfigurationSettingsOptions extends AppConfigurationRequestOptions {
+  /** Full store key filter. When provided, it replaces the default filter derived from `prefix`. */
   keyFilter?: string
   /** `null` selects settings without a label. */
   labelFilter?: string | null
