@@ -7,7 +7,7 @@ import type { PagedAsyncIterableIterator, PageSettings } from './internal/paging
 import { appConfigurationOAuthScope } from './internal/request-core'
 import { jsonRequestError } from './internal/request-error'
 import { parseConnectionString, stripSurrounding } from './internal/text'
-import { normalizeServiceUrl } from './internal/url'
+import { encodeResourceSegment, normalizeServiceUrl } from './internal/url'
 
 const defaultApiVersion = '2023-11-01'
 const settingContentType = 'application/vnd.microsoft.appconfig.kv+json'
@@ -197,7 +197,8 @@ export class AppConfigurationClient {
   }
 
   private settingUrl(key: string, label: string | null | undefined): URL {
-    const url = new URL(`kv/${encodeURIComponent(this.resolveKey(key))}`, `${this.url}/`)
+    const path = encodeResourceSegment(this.resolveKey(key), 'Configuration setting key')
+    const url = new URL(`kv/${path}`, `${this.url}/`)
     const resolvedLabel = label === undefined ? this.defaultLabel : label
     if (typeof resolvedLabel === 'string') {
       url.searchParams.set('label', resolvedLabel)

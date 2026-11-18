@@ -2,7 +2,7 @@ import { fetchJson, normalizeToken } from './internal/oauth'
 import { resolveRequiredScopes } from './internal/request-core'
 import type { RetryOptions } from './internal/request-core'
 import { defaultFetch } from './internal/runtime'
-import { tokenRequestClaims } from './internal/token-options'
+import { requireTenantId, tokenRequestClaims } from './internal/token-options'
 import { sanitizeAuthorityHost } from './internal/url'
 import { TokenRequestError } from './token-request-error'
 import type { AccessToken } from './types'
@@ -32,6 +32,7 @@ export async function getServicePrincipalToken(
     }
   }
 
+  const validatedTenant = requireTenantId(tenantId)
   const scopes = resolveRequiredScopes(options.scope)
   const claims = tokenRequestClaims(options.claims, options.enableCae)
   const authorityHost = sanitizeAuthorityHost(
@@ -42,7 +43,7 @@ export async function getServicePrincipalToken(
   let payload: unknown
   try {
     payload = await fetchJson(
-      `${authorityHost}/${tenantId}/oauth2/v2.0/token`,
+      `${authorityHost}/${validatedTenant}/oauth2/v2.0/token`,
       {
         method: 'POST',
         body: new URLSearchParams({

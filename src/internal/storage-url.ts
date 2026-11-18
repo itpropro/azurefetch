@@ -1,5 +1,7 @@
 const ipAddress = /^(?:\d{1,3}\.){3}\d{1,3}$/u
 const trailingSlash = /\/$/u
+const dotPathSegment = /[/\\](?:\.|%2e){1,2}(?=[/\\]|$)/iu
+const urlPathEnd = /[?#]/u
 
 /** Account name from host-style (`account.blob.…`) or path-style emulator URLs. */
 export function getAccountNameFromUrl(url: string): string {
@@ -26,6 +28,26 @@ export function normalizeStorageUrl(rawUrl: string): string {
   }
 
   return url.toString()
+}
+
+/** Checks the supplied path before the URL parser can remove a segment. */
+export function rejectStorageUrlDotSegments(rawUrl: string): void {
+  // The URL parser trims ASCII space and C0 controls from the ends.
+  let start = 0
+  let end = rawUrl.length
+  while (start < end && (rawUrl.codePointAt(start) ?? Infinity) <= 0x20) {
+    start++
+  }
+  while (end > start && (rawUrl.codePointAt(end - 1) ?? Infinity) <= 0x20) {
+    end--
+  }
+  const [urlPath = ''] = rawUrl
+    .slice(start, end)
+    .replaceAll(/[\t\r\n]/gu, '')
+    .split(urlPathEnd, 1)
+  if (dotPathSegment.test(urlPath)) {
+    throw new TypeError('Storage resource URL cannot contain dot segments')
+  }
 }
 
 /** Appends an already encoded path segment and keeps the query, such as a SAS token. */

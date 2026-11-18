@@ -8,6 +8,7 @@ import type { StorageClientOptions, StorageCredential } from './internal/storage
 import { appendUrlPath, normalizeStorageUrl } from './internal/storage-url'
 import { createTable, deleteTable } from './internal/table-requests'
 import type { TableCreateIfNotExistsResponse, TableDeleteResponse } from './internal/table-requests'
+import { encodeResourceSegment } from './internal/url'
 import { TableClient } from './table-client'
 
 export class TableServiceClient {
@@ -34,7 +35,7 @@ export class TableServiceClient {
   }
 
   public getTableClient(tableName: string): TableClient {
-    const url = appendUrlPath(this.url, encodeURIComponent(tableName))
+    const url = appendUrlPath(this.url, encodeResourceSegment(tableName, 'Table name'))
     return new TableClient(url, this.credential, this.options)
   }
 

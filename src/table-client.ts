@@ -9,7 +9,12 @@ import {
   tableProtocol,
 } from './internal/storage-request'
 import type { StorageClientOptions, StorageCredential } from './internal/storage-request'
-import { appendUrlPath, extendUrlPath, normalizeStorageUrl } from './internal/storage-url'
+import {
+  appendUrlPath,
+  extendUrlPath,
+  normalizeStorageUrl,
+  rejectStorageUrlDotSegments,
+} from './internal/storage-url'
 import {
   parseEntity,
   parseEntityList,
@@ -19,6 +24,7 @@ import {
 import type { TableEntity, TableEntityResult } from './internal/table-entity'
 import { createTable, deleteTable, escapeODataKey } from './internal/table-requests'
 import type { TableCreateIfNotExistsResponse, TableDeleteResponse } from './internal/table-requests'
+import { encodeResourceSegment } from './internal/url'
 
 /** Merge keeps properties absent from the written entity; Replace removes them. */
 export type TableUpdateMode = 'Merge' | 'Replace'
@@ -68,10 +74,12 @@ export class TableClient {
 
   /** `url` addresses the table, for example `https://account.table.core.windows.net/mytable`. */
   public constructor(url: string, credential?: StorageCredential, options?: StorageClientOptions) {
+    rejectStorageUrlDotSegments(url)
     this.url = normalizeStorageUrl(url)
     const serviceUrl = new URL(this.url)
     const segments = serviceUrl.pathname.split('/')
     this.tableName = decodeURIComponent(segments.pop() ?? '')
+    encodeResourceSegment(this.tableName, 'Table name')
     serviceUrl.pathname = segments.join('/')
     this.serviceUrl = serviceUrl.toString()
     this.transport = new StorageTransport(credential, options, tableProtocol)

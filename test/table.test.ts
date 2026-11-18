@@ -54,6 +54,18 @@ describe('TableServiceClient', () => {
     expect(client.url).toBe(`${accountUrl}/`)
   })
 
+  test('rejects a table client with an empty resource name', () => {
+    expect(() => new TableServiceClient('https://example.test').getTableClient('')).toThrow(
+      'Table name must be a non-empty string',
+    )
+  })
+
+  test('rejects a dot segment in a supplied table URL before normalization', () => {
+    expect(() => new TableClient('https://example.test/account/items/%2E')).toThrow(
+      'Storage resource URL cannot contain dot segments',
+    )
+  })
+
   test('signs requests with Shared Key Lite and sends the OData headers', async () => {
     vi.useFakeTimers({ now: new Date('2026-08-24T12:00:00Z'), toFake: ['Date'] })
     let headers = new Headers()

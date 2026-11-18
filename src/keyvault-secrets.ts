@@ -12,7 +12,7 @@ import type { PagedAsyncIterableIterator, PageSettings } from './internal/paging
 import { keyVaultOAuthScope } from './internal/request-core'
 import type { AzureRequestCredential } from './internal/request-core'
 import { jsonRequestError } from './internal/request-error'
-import { normalizeServiceUrl } from './internal/url'
+import { encodeResourceSegment, normalizeServiceUrl } from './internal/url'
 
 const keyVaultApiVersion = '7.6'
 
@@ -213,12 +213,11 @@ export class KeyVaultSecretClient {
   }
 
   private secretUrl(name: string, version?: string, collection = 'secrets'): string {
-    if (name.trim().length === 0) {
-      throw new TypeError('Secret name must be a non-empty string')
+    const url = `${this.url}/${collection}/${encodeResourceSegment(name, 'Secret name')}`
+    if (version === undefined) {
+      return url
     }
-
-    const url = `${this.url}/${collection}/${encodeURIComponent(name)}`
-    return version === undefined ? url : `${url}/${encodeURIComponent(version)}`
+    return version === '' ? `${url}/` : `${url}/${encodeResourceSegment(version, 'Secret version')}`
   }
 
   private deletedSecretUrl(name: string): string {

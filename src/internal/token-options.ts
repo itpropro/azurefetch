@@ -7,7 +7,7 @@ import { encodeBytesToBase64, encodeUtf8 } from './storage-encoding'
 const safeTenantId = /^[\w.-]+$/u
 
 export function requireTenantId(tenantId: string): string {
-  if (!safeTenantId.test(tenantId)) {
+  if (!safeTenantId.test(tenantId) || tenantId === '.' || tenantId === '..') {
     throw new TypeError('tenantId may only contain letters, digits and _ . -')
   }
 
