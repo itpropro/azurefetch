@@ -22,6 +22,8 @@ const statusLinePattern = /^HTTP\/1\.1 (\d{3})(?:[ \r\n]|$)/u
 const errorCodePattern = /^x-ms-error-code:\s*(\S+)/imu
 const boundaryPattern = /boundary=([^;\s]+)/u
 const headerSeparator = /\r?\n\r?\n/u
+const lineSeparator = /\r?\n/u
+const boundarySuffix = /^(--)?[\t ]*$/u
 
 export class BlobBatchClient {
   private readonly url: string
@@ -108,7 +110,33 @@ function parseSubResponses(
   expected: number,
 ): BlobBatchSubResponse[] {
   const subResponses: BlobBatchSubResponse[] = []
-  for (const part of body.split(`--${boundary}`).slice(1)) {
+  const delimiter = `--${boundary}`
+  let partLines: string[] | undefined
+  let closed = false
+  for (const line of body.split(lineSeparator)) {
+    const boundaryLine = line.startsWith(delimiter)
+      ? boundarySuffix.exec(line.slice(delimiter.length))
+      : null
+    if (boundaryLine === null) {
+      partLines?.push(line)
+      continue
+    }
+    if (partLines !== undefined) {
+      addSubResponse(partLines.join('\n'))
+    }
+    if (boundaryLine[1] !== undefined) {
+      closed = true
+      break
+    }
+    partLines = []
+  }
+
+  if (!closed || Object.keys(subResponses).length !== expected) {
+    throw new Error('Blob batch response does not match its sub-requests')
+  }
+  return subResponses
+
+  function addSubResponse(part: string): void {
     const [mimeHeaders = '', response = ''] = part.split(headerSeparator, 2)
     const contentId = contentIdPattern.exec(mimeHeaders)?.[1]
     const status = statusLinePattern.exec(response)?.[1]
@@ -123,9 +151,4 @@ function parseSubResponses(
       }
     }
   }
-
-  if (Object.keys(subResponses).length !== expected) {
-    throw new Error('Blob batch response does not match its sub-requests')
-  }
-  return subResponses
 }
