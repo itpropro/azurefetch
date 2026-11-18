@@ -134,7 +134,8 @@ export async function acquireDefaultAzureCredentialToken(
   if (
     scopes.length === 1 &&
     scope?.endsWith('/.default') === true &&
-    selectTenant(options.tenantId, request.tenantId) === options.tenantId &&
+    (options.tenantId === undefined ||
+      selectTenant(options.tenantId, request.tenantId) === options.tenantId) &&
     request.claims === undefined
   ) {
     const managedIdentityToken = await unlessUnavailable(

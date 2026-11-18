@@ -395,20 +395,23 @@ describe('DefaultAzureCredential getToken options', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  test('keeps managed identity available for the configured tenant with CAE enabled', async () => {
-    useAppServiceEnvironment()
-    const calls = await installCommands({ az: printToken('cli-token') })
-    const fetchMock = createFetchMock([
-      () => jsonResponse({ access_token: 'managed-identity-fixture', expires_in: 3600 }),
-    ])
-    const credential = new DefaultAzureCredential({ tenantId: 'home', fetch: fetchMock })
+  test.each([undefined, 'home'])(
+    'keeps managed identity available with CAE and configured tenant %s',
+    async (tenantId) => {
+      useAppServiceEnvironment()
+      const calls = await installCommands({ az: printToken('cli-token') })
+      const fetchMock = createFetchMock([
+        () => jsonResponse({ access_token: 'managed-identity-fixture', expires_in: 3600 }),
+      ])
+      const credential = new DefaultAzureCredential({ tenantId, fetch: fetchMock })
 
-    await expect(
-      credential.getToken(scope, { tenantId: 'home', enableCae: true }),
-    ).resolves.toMatchObject({ token: 'managed-identity-fixture' })
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    await expect(calls()).resolves.toStrictEqual([])
-  })
+      await expect(
+        credential.getToken(scope, { tenantId: 'home', enableCae: true }),
+      ).resolves.toMatchObject({ token: 'managed-identity-fixture' })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      await expect(calls()).resolves.toStrictEqual([])
+    },
+  )
 
   test('answers claims with re-login commands for Azure CLI and Azure PowerShell, even with a cached token', async () => {
     const calls = await installCommands({ az: printToken('cli-token'), pwsh: printToken('ps') })
