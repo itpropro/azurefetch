@@ -355,6 +355,19 @@ describe('DefaultAzureCredential getToken options', () => {
     await expect(calls()).resolves.toStrictEqual([])
   })
 
+  test('rejects a blank workload identity token file before sending a request', async () => {
+    const tokenFile = await useWorkloadIdentityEnvironment()
+    await writeFile(tokenFile, '\n')
+    const fetchMock = createFetchMock([
+      () => jsonResponse({ access_token: 'workload-identity-fixture', expires_in: 3600 }),
+    ])
+
+    await expect(getDefaultAzureCredentialToken({ scope, fetch: fetchMock })).rejects.toThrow(
+      'Workload identity token file is empty',
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   test('sends the allowed tenant, claims and CAE capability with workload identity', async () => {
     await useWorkloadIdentityEnvironment()
     const requests: ReturnType<typeof tokenRequest>[] = []
