@@ -67,7 +67,8 @@ export class DefaultAzureCredential {
 
   public async getAuthorizationHeader(
     scopes: string | string[] = storageOAuthScope,
+    options?: GetTokenOptions,
   ): Promise<string> {
-    return formatAuthorizationHeader(await this.getToken(scopes))
+    return formatAuthorizationHeader(await this.getToken(scopes, options))
   }
 }

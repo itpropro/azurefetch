@@ -1,4 +1,4 @@
-import type { TokenCredential } from '../types'
+import type { GetTokenOptions, TokenCredential } from '../types'
 import { formatAuthorizationHeader } from './token'
 
 export const storageOAuthScope = 'https://storage.azure.com/.default'
@@ -6,7 +6,7 @@ export const keyVaultOAuthScope = 'https://vault.azure.net/.default'
 export const appConfigurationOAuthScope = 'https://appconfig.azure.com/.default'
 
 interface HeaderCredential {
-  getAuthorizationHeader: (scope?: string | string[]) => Promise<string>
+  getAuthorizationHeader: (scope?: string | string[], options?: GetTokenOptions) => Promise<string>
 }
 
 export type AzureRequestCredential = HeaderCredential | TokenCredential
@@ -31,12 +31,15 @@ export function resolveRequiredScopes(scope: string | string[]): string[] {
 export async function getAuthorizationHeader(
   credential: AzureRequestCredential,
   scope: string | string[],
+  abortSignal?: AbortSignal,
 ): Promise<string> {
+  abortSignal?.throwIfAborted()
+  const options: [GetTokenOptions?] = abortSignal === undefined ? [] : [{ abortSignal }]
   if ('getAuthorizationHeader' in credential) {
-    return await credential.getAuthorizationHeader(scope)
+    return await credential.getAuthorizationHeader(scope, ...options)
   }
 
-  const token = await credential.getToken(resolveRequiredScopes(scope))
+  const token = await credential.getToken(resolveRequiredScopes(scope), ...options)
   if (token === null) {
     throw new Error('Unable to resolve a token from the configured credential')
   }

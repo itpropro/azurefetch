@@ -75,7 +75,9 @@ export class AzureClient {
     if (signsRequest) {
       await credential.signRequest(request)
     } else {
-      request.headers.set('Authorization', await getAuthorizationHeader(credential, scope))
+      const signal =
+        requestInit.signal !== undefined || input instanceof Request ? request.signal : undefined
+      request.headers.set('Authorization', await getAuthorizationHeader(credential, scope, signal))
     }
 
     return await sendWithRetry(
