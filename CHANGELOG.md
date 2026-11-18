@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.7.0](https://github.com/itpropro/azurefetch/compare/v0.6.2...v0.7.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **azurefetch:** honor tenant and claims credential requests ([#76](https://github.com/itpropro/azurefetch/issues/76))
+* **azurefetch:** restrict credential transport defaults ([#69](https://github.com/itpropro/azurefetch/issues/69))
+* **azurefetch:** serialize OData filter literals ([#68](https://github.com/itpropro/azurefetch/issues/68))
+
+### Bug Fixes
+
+* **appconfig:** validate sync tokens before storing them ([d284ed7](https://github.com/itpropro/azurefetch/commit/d284ed7cd759b6dc7bd03b7a8fcf4f72db4611fd))
+* **azurefetch:** clear temporary key bytes after import ([768f52e](https://github.com/itpropro/azurefetch/commit/768f52e57ebd92049fb5b4b926460d3cb8335e68))
+* **azurefetch:** clear temporary key bytes after import ([#71](https://github.com/itpropro/azurefetch/issues/71)) ([bdd8d15](https://github.com/itpropro/azurefetch/commit/bdd8d15aaad632217cc80580cfdb903e13b52614))
+* **azurefetch:** compare sync-token sequences exactly ([1a92b10](https://github.com/itpropro/azurefetch/commit/1a92b10272390d6f0cb33d85a54f610daf773a69))
+* **azurefetch:** handle out-of-range blob XML character references ([00c772d](https://github.com/itpropro/azurefetch/commit/00c772d0038886d6674420b4aa64a6ef30771944))
+* **azurefetch:** handle out-of-range blob XML character references ([#70](https://github.com/itpropro/azurefetch/issues/70)) ([885a3a4](https://github.com/itpropro/azurefetch/commit/885a3a42120e6f1b8b61cbfdd2b93fbe197a643f))
+* **azurefetch:** honor tenant and CAE credential requests ([61b974d](https://github.com/itpropro/azurefetch/commit/61b974dea5dcda3a9e4bf51e2884c74e62cb3745))
+* **azurefetch:** honor tenant and claims credential requests ([#76](https://github.com/itpropro/azurefetch/issues/76)) ([75c409e](https://github.com/itpropro/azurefetch/commit/75c409e8d2f5e16cbdba1e027ac3264249d0a951))
+* **azurefetch:** keep table continuation options separate ([b3969f0](https://github.com/itpropro/azurefetch/commit/b3969f0714f2d637bfb625ae3c13a4e8d198734a))
+* **azurefetch:** keep table continuation options separate ([#74](https://github.com/itpropro/azurefetch/issues/74)) ([9e42d7d](https://github.com/itpropro/azurefetch/commit/9e42d7d320bc86a49eeabb5b9a4183d78561b4d3))
+* **azurefetch:** match URL trimming before table path validation ([e4a9d4b](https://github.com/itpropro/azurefetch/commit/e4a9d4b73b341efa1a109b756dc12973e25f569f))
+* **azurefetch:** omit URL queries from blob batch diagnostics ([#66](https://github.com/itpropro/azurefetch/issues/66)) ([f496bab](https://github.com/itpropro/azurefetch/commit/f496bab98d87e0a7ecafb7085e772e1a753e99e5))
+* **azurefetch:** parse blob batch response headers in their MIME blocks ([14f182e](https://github.com/itpropro/azurefetch/commit/14f182e7e0f3a4085a6fefad1393d6fc4c917dcd))
+* **azurefetch:** parse complete batch response identifiers ([6ee32e8](https://github.com/itpropro/azurefetch/commit/6ee32e8f5d8d69d74d3c2fffe4d571c38bc3722d))
+* **azurefetch:** preserve an explicit OData Int64 suffix ([3d07e26](https://github.com/itpropro/azurefetch/commit/3d07e26fa9ddc5f672ddd482f075e45a8e6f1a48))
+* **azurefetch:** preserve compatible managed identity and developer token fallback ([646cb0f](https://github.com/itpropro/azurefetch/commit/646cb0f95df2709c84105556311fbe968012809e))
+* **azurefetch:** preserve direct fetch redirect and referrer settings ([26c27b8](https://github.com/itpropro/azurefetch/commit/26c27b80280037ecf82f5011868af7a0d3751b74))
+* **azurefetch:** preserve navigation state for direct Fetch requests ([802b243](https://github.com/itpropro/azurefetch/commit/802b243cec8cad61beeaac3b8c9e2006946dd6bd))
+* **azurefetch:** reject blank workload identity assertions ([0f0261b](https://github.com/itpropro/azurefetch/commit/0f0261bf5e84781c08e0d74b0687e9c444e374d2))
+* **azurefetch:** reject blank workload identity assertions ([#75](https://github.com/itpropro/azurefetch/issues/75)) ([3c5d146](https://github.com/itpropro/azurefetch/commit/3c5d1469b2953b87906d20bc2c97e1827e13d278))
+* **azurefetch:** report invalid character references in blob listings ([1bb54f1](https://github.com/itpropro/azurefetch/commit/1bb54f130c4b80a2cf5ae9cc9cfc47d6cc681a96))
+* **azurefetch:** restrict credential transport defaults ([75c89e3](https://github.com/itpropro/azurefetch/commit/75c89e3c29b2eff25983f98f26f0b179e8120e20))
+* **azurefetch:** restrict credential transport defaults ([#69](https://github.com/itpropro/azurefetch/issues/69)) ([1120a6c](https://github.com/itpropro/azurefetch/commit/1120a6cc3f4df305932ce9998e528b7b847fe1c2))
+* **azurefetch:** retain managed identity when no tenant is configured ([1ef143d](https://github.com/itpropro/azurefetch/commit/1ef143d5c07ba79796f2f389b49ea2e82258048c))
+* **azurefetch:** serialize Int64 and Date literals consistently ([e797d76](https://github.com/itpropro/azurefetch/commit/e797d7698774df8f94496f63c016543538a9a234))
+* **azurefetch:** serialize OData filter literals ([#68](https://github.com/itpropro/azurefetch/issues/68)) ([81e8d7f](https://github.com/itpropro/azurefetch/commit/81e8d7f9c5066d9d4ba9ff4282c9839d5014d864))
+* **azurefetch:** stop parsing blob batch responses at the closing MIME delimiter ([d0689d0](https://github.com/itpropro/azurefetch/commit/d0689d0ac46789740066c476be94f2a76339b839))
+* **azurefetch:** validate blob batch response IDs ([#67](https://github.com/itpropro/azurefetch/issues/67)) ([c78f6ee](https://github.com/itpropro/azurefetch/commit/c78f6ee520a5f499743305947dcef269af1c0946))
+* **azurefetch:** validate developer credential inputs ([72e277f](https://github.com/itpropro/azurefetch/commit/72e277fa11e3d76029d149f1f636f6150c1a5821))
+* **azurefetch:** validate developer credential inputs ([#77](https://github.com/itpropro/azurefetch/issues/77)) ([19638b7](https://github.com/itpropro/azurefetch/commit/19638b709bc3dfcc997ef2fd3d619de530b72e79))
+* **azurefetch:** validate resource names and authority paths ([6001048](https://github.com/itpropro/azurefetch/commit/60010483eb9b722ac402bdaf2e970a26c5df49ea))
+* **azurefetch:** validate resource names and authority paths ([#73](https://github.com/itpropro/azurefetch/issues/73)) ([c9725b4](https://github.com/itpropro/azurefetch/commit/c9725b4e7897504e1e34347020f5f0e13a9984d3))
+* **azurefetch:** validate sync tokens before storing them ([#65](https://github.com/itpropro/azurefetch/issues/65)) ([e4d14fe](https://github.com/itpropro/azurefetch/commit/e4d14feaf6789cf3de907c706ec6b43c589257f6))
+* **azurefetch:** validate table URL paths before normalization ([90f52a3](https://github.com/itpropro/azurefetch/commit/90f52a3772749ec09f0ed21c2c2e7a8647847aa0))
+* **blob:** omit URL queries from batch diagnostics ([7d6cdd0](https://github.com/itpropro/azurefetch/commit/7d6cdd05e06d660b8a21053ae8a18a603f43409f))
+* **blob:** validate batch response IDs ([651a7b3](https://github.com/itpropro/azurefetch/commit/651a7b3b55b757d96e603ca74bf37d50e4841757))
+* **table:** serialize OData filter literals ([acbf175](https://github.com/itpropro/azurefetch/commit/acbf175446bac85d5a690549c303e8f13eb38e7d))
+
 ## [0.6.2](https://github.com/itpropro/azurefetch/compare/v0.6.1...v0.6.2) (2026-10-25)
 
 
