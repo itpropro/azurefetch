@@ -187,6 +187,10 @@ for await (const page of client.listConfigurationSettings().byPage()) {
 }
 ```
 
+`prefix` qualifies single-key operations and supplies the default listing filter.
+An explicit `keyFilter` replaces that filter and applies to full keys across the
+store. Use Azure permissions for access control.
+
 ### Blob, Table, and Key Vault clients
 
 Import service clients from the main package:
