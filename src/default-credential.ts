@@ -73,10 +73,7 @@ export async function getDefaultAzureCredentialToken(
  * The tenant the chain uses when a call names none: the environment credential's, then workload
  * identity's, then the developer tools'. Calls whose tenant selects the same one share a token.
  */
-export function defaultChainTenant(options: DefaultAzureCredentialOptions): {
-  tenantId: string | undefined
-  fixedSource: boolean
-} {
+export function defaultChainTenant(options: DefaultAzureCredentialOptions): string | undefined {
   const tenantId = getEnv('AZURE_TENANT_ID')
   const clientId = getEnv('AZURE_CLIENT_ID')
   const hasEnvironmentCredential =
@@ -84,7 +81,7 @@ export function defaultChainTenant(options: DefaultAzureCredentialOptions): {
     getEnv('AZURE_CLIENT_CERTIFICATE_PATH') !== undefined ||
     (getEnv('AZURE_USERNAME') !== undefined && getRawEnv('AZURE_PASSWORD') !== undefined)
   if (tenantId !== undefined && clientId !== undefined && hasEnvironmentCredential) {
-    return { tenantId, fixedSource: true }
+    return tenantId
   }
 
   const workloadTenantId = options.tenantId ?? tenantId
@@ -92,10 +89,7 @@ export function defaultChainTenant(options: DefaultAzureCredentialOptions): {
     workloadTenantId !== undefined &&
     (options.managedIdentityClientId ?? clientId) !== undefined &&
     getEnv('AZURE_FEDERATED_TOKEN_FILE') !== undefined
-  return {
-    tenantId: hasWorkloadIdentity ? workloadTenantId : options.tenantId,
-    fixedSource: hasWorkloadIdentity,
-  }
+  return hasWorkloadIdentity ? workloadTenantId : options.tenantId
 }
 
 export async function acquireDefaultAzureCredentialToken(
@@ -140,9 +134,8 @@ export async function acquireDefaultAzureCredentialToken(
   if (
     scopes.length === 1 &&
     scope?.endsWith('/.default') === true &&
-    selectTenant(undefined, request.tenantId) === undefined &&
-    request.claims === undefined &&
-    request.enableCae !== true
+    selectTenant(options.tenantId, request.tenantId) === options.tenantId &&
+    request.claims === undefined
   ) {
     const managedIdentityToken = await unlessUnavailable(
       async () =>
@@ -165,10 +158,6 @@ export async function acquireDefaultAzureCredentialToken(
       `Could not find available credentials. ${claimsLoginInstructions(request.claims, scopes, request.tenantId)}`,
     )
   }
-  if (request.enableCae === true) {
-    throw new TokenUnavailableError('No configured credential can acquire a CAE token')
-  }
-
   const developerToken = await unlessUnavailable(
     async () =>
       await getDeveloperToken(

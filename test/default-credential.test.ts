@@ -395,18 +395,18 @@ describe('DefaultAzureCredential getToken options', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  test('requires a CAE-capable source for CAE requests', async () => {
+  test('keeps managed identity available for the configured tenant with CAE enabled', async () => {
     useAppServiceEnvironment()
     const calls = await installCommands({ az: printToken('cli-token') })
     const fetchMock = createFetchMock([
       () => jsonResponse({ access_token: 'managed-identity-fixture', expires_in: 3600 }),
     ])
-    const credential = new DefaultAzureCredential({ fetch: fetchMock })
+    const credential = new DefaultAzureCredential({ tenantId: 'home', fetch: fetchMock })
 
-    await expect(credential.getToken(scope, { enableCae: true })).rejects.toThrow(
-      'No configured credential can acquire a CAE token',
-    )
-    expect(fetchMock).not.toHaveBeenCalled()
+    await expect(
+      credential.getToken(scope, { tenantId: 'home', enableCae: true }),
+    ).resolves.toMatchObject({ token: 'managed-identity-fixture' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
     await expect(calls()).resolves.toStrictEqual([])
   })
 

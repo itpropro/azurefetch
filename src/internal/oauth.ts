@@ -26,7 +26,7 @@ export async function fetchJson(
       return JSON.parse(body)
     } catch {
       // The parser error can quote the body, which may contain a token.
-      throw new TokenRequestError('Token response is not valid JSON', response.status)
+      throw new TokenRequestError('Token response is not valid JSON')
     }
   }
 

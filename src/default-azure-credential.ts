@@ -41,11 +41,11 @@ export class DefaultAzureCredential {
     const tenantId = options.tenantId === undefined ? undefined : requireTenantId(options.tenantId)
     const { enableCae } = options
     const claims = challengeClaims(options.claims)
-    const configured = defaultChainTenant(this.options)
-    const key = JSON.stringify([
-      tokenCacheKey(scope, selectTenant(configured.tenantId, tenantId), enableCae),
-      !configured.fixedSource && selectTenant(undefined, tenantId) !== undefined,
-    ])
+    const key = tokenCacheKey(
+      scope,
+      selectTenant(defaultChainTenant(this.options), tenantId),
+      enableCae,
+    )
     let getToken = this.tokens.get(key)
     if (getToken === undefined) {
       getToken = cacheToken<ClaimsChallenge>(
