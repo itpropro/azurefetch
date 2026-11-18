@@ -68,7 +68,7 @@ export class AppConfigurationClient {
   private readonly apiVersion: string
   private readonly prefix: string | undefined
   private readonly defaultLabel: string | null | undefined
-  private readonly syncTokens = new Map<string, { token: string; sequenceNumber: number }>()
+  private readonly syncTokens = new Map<string, { token: string; sequenceNumber: bigint }>()
 
   public constructor(
     endpoint: string,
@@ -117,12 +117,12 @@ export class AppConfigurationClient {
         continue
       }
 
-      const sequenceNumber = Number(sequence)
       const headerValue = `${id}=${value}`
-      if (!Number.isSafeInteger(sequenceNumber) || !syncTokenHeaderValue.test(headerValue)) {
+      if (!syncTokenHeaderValue.test(headerValue)) {
         continue
       }
-      if ((this.syncTokens.get(id)?.sequenceNumber ?? -1) < sequenceNumber) {
+      const sequenceNumber = BigInt(sequence)
+      if ((this.syncTokens.get(id)?.sequenceNumber ?? -1n) < sequenceNumber) {
         this.syncTokens.set(id, { token: headerValue, sequenceNumber })
       }
     }
