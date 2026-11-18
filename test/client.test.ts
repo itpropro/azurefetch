@@ -15,6 +15,9 @@ function sentRequest(fetcher: ReturnType<typeof recordingFetch>): Request {
     throw new Error('Expected a request')
   }
 
+  if (input instanceof Request && init === undefined) {
+    return input
+  }
   return new Request(input, init)
 }
 
@@ -50,7 +53,7 @@ describe('AzureClient', () => {
 
     const request = sentRequest(fetcher)
     expect(request.method).toBe('POST')
-    expect(request.redirect).toBe('manual')
+    expect(request.redirect).toBe('follow')
     expect(request.headers.get('Authorization')).toBe(expected)
     expect(getToken).toHaveBeenCalledWith(['https://storage.azure.com/.default'])
   })
@@ -63,6 +66,25 @@ describe('AzureClient', () => {
     await expect(client.fetch('http://example.test')).rejects.toThrow('must use HTTPS')
     expect(getAuthorizationHeader).not.toHaveBeenCalled()
     expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  test('preserves the redirect and referrer settings of an input Request', async () => {
+    const fetcher = recordingFetch()
+    const client = new AzureClient({
+      credential: { getAuthorizationHeader: async () => 'Bearer local-test' },
+      fetch: fetcher,
+    })
+    await client.fetch(
+      new Request('https://example.test', {
+        redirect: 'follow',
+        referrer: 'https://origin.test/',
+        referrerPolicy: 'no-referrer',
+      }),
+    )
+
+    expect(sentRequest(fetcher).redirect).toBe('follow')
+    expect(sentRequest(fetcher).referrer).toBe('https://origin.test/')
+    expect(sentRequest(fetcher).referrerPolicy).toBe('no-referrer')
   })
 
   test('prefers getAuthorizationHeader over getToken on mixed credentials', async () => {

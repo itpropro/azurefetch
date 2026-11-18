@@ -280,9 +280,10 @@ If no credential is provided, it uses a `DefaultAzureCredential` for the configu
 Tokens are cached per scope, tenant and CAE setting. When a refresh fails, the cached token is used until it expires, and the next refresh waits 30 s.
 
 Custom authority hosts, Key Vault URLs, and App Configuration endpoints must use HTTPS.
-Requests using token credentials also require HTTPS. Azure requests do not follow redirects
-automatically. For a direct `AzureClient.fetch` call, pass `redirect` in the request options
-to choose a different policy.
+Requests using token credentials also require HTTPS. OAuth, managed identity, and
+the storage transport handle redirects manually. Key Vault and App Configuration
+requests default to manual redirects. Direct `AzureClient.fetch` calls use the
+redirect policy of the supplied request or request options.
 
 ### Default credential chain
 
