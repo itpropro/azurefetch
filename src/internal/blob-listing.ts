@@ -66,12 +66,9 @@ function decodeName(raw: string, encoded: boolean): string {
   const name = raw.replaceAll(
     xmlEntity,
     (entity, hex: string | undefined, decimal: string | undefined, named: string | undefined) => {
-      if (hex !== undefined) {
-        return String.fromCodePoint(Number.parseInt(hex, 16))
-      }
-
-      if (decimal !== undefined) {
-        return String.fromCodePoint(Number(decimal))
+      if (hex !== undefined || decimal !== undefined) {
+        const codePoint = hex === undefined ? Number(decimal) : Number.parseInt(hex, 16)
+        return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : entity
       }
 
       return namedEntities.get(named ?? '') ?? entity
