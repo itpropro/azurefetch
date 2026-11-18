@@ -10,6 +10,7 @@ import {
 } from './internal/storage-request'
 import type { StorageClientOptions, StorageCredential } from './internal/storage-request'
 import { appendUrlPath, normalizeStorageUrl } from './internal/storage-url'
+import { encodeResourceSegment } from './internal/url'
 import { StorageSharedKeyCredential } from './storage-shared-key-credential'
 
 export interface ContainerItem {
@@ -58,7 +59,7 @@ export class BlobServiceClient {
   }
 
   public getContainerClient(containerName: string): ContainerClient {
-    const url = appendUrlPath(this.url, encodeURIComponent(containerName))
+    const url = appendUrlPath(this.url, encodeResourceSegment(containerName, 'Container name'))
     return new ContainerClient(url, this.credential, this.options)
   }
 

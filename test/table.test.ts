@@ -54,6 +54,12 @@ describe('TableServiceClient', () => {
     expect(client.url).toBe(`${accountUrl}/`)
   })
 
+  test('rejects a table client with an empty resource name', () => {
+    expect(() => new TableServiceClient('https://example.test').getTableClient('')).toThrow(
+      'Table name must be a non-empty string',
+    )
+  })
+
   test('signs requests with Shared Key Lite and sends the OData headers', async () => {
     vi.useFakeTimers({ now: new Date('2026-08-24T12:00:00Z'), toFake: ['Date'] })
     let headers = new Headers()

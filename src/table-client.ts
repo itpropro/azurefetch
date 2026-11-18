@@ -19,6 +19,7 @@ import {
 import type { TableEntity, TableEntityResult } from './internal/table-entity'
 import { createTable, deleteTable, escapeODataKey } from './internal/table-requests'
 import type { TableCreateIfNotExistsResponse, TableDeleteResponse } from './internal/table-requests'
+import { encodeResourceSegment } from './internal/url'
 
 /** Merge keeps properties absent from the written entity; Replace removes them. */
 export type TableUpdateMode = 'Merge' | 'Replace'
@@ -72,6 +73,7 @@ export class TableClient {
     const serviceUrl = new URL(this.url)
     const segments = serviceUrl.pathname.split('/')
     this.tableName = decodeURIComponent(segments.pop() ?? '')
+    encodeResourceSegment(this.tableName, 'Table name')
     serviceUrl.pathname = segments.join('/')
     this.serviceUrl = serviceUrl.toString()
     this.transport = new StorageTransport(credential, options, tableProtocol)
