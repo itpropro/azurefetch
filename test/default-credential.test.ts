@@ -32,7 +32,6 @@ const tokenForRequestedScope = (_url: string, init: RequestInit) =>
     expires_in: 3600,
   })
 const azureCliCall = /^az /u
-const appServiceIdentityUrl = /^https:\/\/appservice\.azurewebsites\.net\/identity\?/u
 const credentialFields = new Set(['client_secret', 'client_assertion', 'password'])
 /** Length of an array property of decoded JSON, or `undefined` when it is absent. */
 const jsonLength = (value: unknown, key: string): number | undefined => {
@@ -393,18 +392,10 @@ describe('DefaultAzureCredential getToken options', () => {
     })
   })
 
-  test('moves on to managed identity, which ignores the per-call options, when workload identity refuses the tenant', async () => {
+  test('stops the chain when workload identity refuses the requested tenant', async () => {
     await useWorkloadIdentityEnvironment()
     const fetchMock = createFetchMock([
-      (url) => {
-        expect(url).toMatch(appServiceIdentityUrl)
-        expect([...new URL(url).searchParams.keys()]).toStrictEqual([
-          'api-version',
-          'resource',
-          'client_id',
-        ])
-        return jsonResponse({ access_token: 'mi-token', expires_in: 3600 })
-      },
+      () => jsonResponse({ access_token: 'managed-identity-fixture', expires_in: 3600 }),
     ])
 
     await expect(
@@ -413,8 +404,27 @@ describe('DefaultAzureCredential getToken options', () => {
         claims,
         enableCae: true,
       }),
-    ).resolves.toMatchObject({ token: 'mi-token' })
+    ).rejects.toThrow('not configured to acquire tokens for tenant guest')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  test.each([undefined, 'home'])(
+    'keeps managed identity available with CAE and configured tenant %s',
+    async (tenantId) => {
+      useAppServiceEnvironment()
+      const calls = await installCommands({ az: printToken('cli-token') })
+      const fetchMock = createFetchMock([
+        () => jsonResponse({ access_token: 'managed-identity-fixture', expires_in: 3600 }),
+      ])
+      const credential = new DefaultAzureCredential({ tenantId, fetch: fetchMock })
+
+      await expect(
+        credential.getToken(scope, { tenantId: 'home', enableCae: true }),
+      ).resolves.toMatchObject({ token: 'managed-identity-fixture' })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      await expect(calls()).resolves.toStrictEqual([])
+    },
+  )
 
   test('answers claims with re-login commands for Azure CLI and Azure PowerShell, even with a cached token', async () => {
     const calls = await installCommands({ az: printToken('cli-token'), pwsh: printToken('ps') })

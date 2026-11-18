@@ -17,6 +17,7 @@ import {
   environmentAllowedTenants,
   requireTenantId,
   resolveTenant,
+  selectTenant,
   tokenRequestClaims,
 } from './internal/token-options'
 import { sanitizeAuthorityHost } from './internal/url'
@@ -118,26 +119,25 @@ export async function acquireDefaultAzureCredentialToken(
     workloadClientId !== undefined &&
     federatedTokenFile !== undefined
   ) {
-    const workloadToken = await unlessUnavailable(
-      async () =>
-        await getWorkloadIdentityToken(
-          resolveTenant(workloadTenantId, request.tenantId, options.additionallyAllowedTenants) ??
-            workloadTenantId,
-          workloadClientId,
-          federatedTokenFile,
-          scopes,
-          options,
-          request,
-        ),
-      signal,
+    return await getWorkloadIdentityToken(
+      resolveTenant(workloadTenantId, request.tenantId, options.additionallyAllowedTenants) ??
+        workloadTenantId,
+      workloadClientId,
+      federatedTokenFile,
+      scopes,
+      options,
+      request,
     )
-    if (workloadToken !== undefined) {
-      return workloadToken
-    }
   }
 
   const [scope] = scopes
-  if (scopes.length === 1 && scope?.endsWith('/.default') === true) {
+  if (
+    scopes.length === 1 &&
+    scope?.endsWith('/.default') === true &&
+    (options.tenantId === undefined ||
+      selectTenant(options.tenantId, request.tenantId) === options.tenantId) &&
+    request.claims === undefined
+  ) {
     const managedIdentityToken = await unlessUnavailable(
       async () =>
         await getManagedIdentityToken({
@@ -159,7 +159,6 @@ export async function acquireDefaultAzureCredentialToken(
       `Could not find available credentials. ${claimsLoginInstructions(request.claims, scopes, request.tenantId)}`,
     )
   }
-
   const developerToken = await unlessUnavailable(
     async () =>
       await getDeveloperToken(
