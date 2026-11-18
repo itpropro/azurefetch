@@ -49,14 +49,30 @@ export class AzureClient {
     // `Request` turns every body into a stream, so replayability is decided on the original body.
     const body = requestInit.body ?? (input instanceof Request ? input.body : null)
     const replayable = isReplayableBody(body)
-    const request = new Request(input, requestInit)
+    // A nonempty RequestInit resets navigation state even when its values match the input.
+    const inheritReferrer =
+      input instanceof Request && (input.mode !== 'navigate' || Object.keys(requestInit).length > 0)
+    const request = new Request(
+      input,
+      inheritReferrer
+        ? {
+            ...requestInit,
+            referrer: requestInit.referrer ?? input.referrer,
+            referrerPolicy: requestInit.referrerPolicy ?? input.referrerPolicy,
+          }
+        : requestInit,
+    )
     const credential =
       azure.credential ??
       this.options.credential ??
       this.getDefaultCredential(azure.authorityHost ?? this.options.authorityHost)
+    const signsRequest = 'signRequest' in credential
+    if (!signsRequest) {
+      requireHttpsUrl(request.url, 'Azure request URL')
+    }
     const scope = azure.scope ?? this.options.scope ?? storageOAuthScope
 
-    if ('signRequest' in credential) {
+    if (signsRequest) {
       await credential.signRequest(request)
     } else {
       request.headers.set('Authorization', await getAuthorizationHeader(credential, scope))

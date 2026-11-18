@@ -258,6 +258,7 @@ export class KeyVaultSecretClient {
 
     const response = await this.client.fetch(url, {
       ...options,
+      redirect: options.redirect ?? 'manual',
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),

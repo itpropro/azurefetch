@@ -14,11 +14,14 @@ export async function fetchJson(
   retryOptions?: RetryOptions,
 ): Promise<unknown> {
   const url = validatedUrl(input, init)
-  const response = await sendWithRetry(async () => await fetcher(url, init), {
-    ...retryOptions,
-    signal: init.signal,
-    body: init.body,
-  })
+  const response = await sendWithRetry(
+    async () => await fetcher(url, { ...init, redirect: 'manual' }),
+    {
+      ...retryOptions,
+      signal: init.signal,
+      body: init.body,
+    },
+  )
   if (response.ok) {
     // Body failures such as cancellation or a reset connection must reach the caller.
     const body = await response.text()

@@ -267,7 +267,13 @@ export class AppConfigurationClient {
       headers.set('Sync-Token', syncToken)
     }
 
-    const response = await this.client.fetch(url, { ...options, method, headers, body })
+    const response = await this.client.fetch(url, {
+      ...options,
+      redirect: options.redirect ?? 'manual',
+      method,
+      headers,
+      body,
+    })
     this.updateSyncToken(response.headers.get('sync-token') ?? '')
     if (!response.ok) {
       throw await jsonRequestError(`${method} ${url.toString()}`, response, (problem) => ({

@@ -149,6 +149,7 @@ async function probeImds(
   const timeout = AbortSignal.timeout(imdsProbeTimeoutMs)
   try {
     const response = await fetcher(endpoint, {
+      redirect: 'manual',
       signal: signal === undefined ? timeout : AbortSignal.any([signal, timeout]),
     })
     await response.body?.cancel()
