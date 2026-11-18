@@ -367,6 +367,24 @@ describe('TableClient', () => {
     ])
   })
 
+  test('resumes entity listing with only the documented continuation fields', async () => {
+    let query: Record<string, string> | undefined
+    const fetcher = createFetchMock([
+      (url) => {
+        query = Object.fromEntries(new URL(url).searchParams)
+        return jsonResponse({ value: [] })
+      },
+    ])
+
+    await collect(
+      anonymousTable(fetcher).listEntities().byPage({
+        continuationToken: 'NextRowKey=row+2&label=fixture',
+        maxPageSize: 10,
+      }),
+    )
+    expect(query).toStrictEqual({ $top: '10', NextRowKey: 'row 2' })
+  })
+
   test('follows continuation tokens with the same filter and projection', async () => {
     const queries: Record<string, string>[] = []
     const fetcher = createFetchMock([

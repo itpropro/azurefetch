@@ -161,12 +161,14 @@ export class TableClient {
             options.maxPageSize === undefined
               ? undefined
               : String(Math.min(options.maxPageSize, maxTablePageSize))
+          const cursor = new URLSearchParams(continuationToken)
           const response = await this.transport.send('GET', extendUrlPath(this.url, '()'), {
             query: {
               $filter: query.filter,
               $select: select,
               $top: top,
-              ...Object.fromEntries(new URLSearchParams(continuationToken)),
+              NextPartitionKey: cursor.get('NextPartitionKey') ?? undefined,
+              NextRowKey: cursor.get('NextRowKey') ?? undefined,
             },
           })
           if (!response.ok) {
