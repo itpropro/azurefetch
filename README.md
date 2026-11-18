@@ -292,8 +292,8 @@ Custom authority hosts, Key Vault URLs, and App Configuration endpoints must use
 
    Its failures stop the chain. `AZURE_ADDITIONALLY_ALLOWED_TENANTS` lists further tenants, separated by semicolons, unless `additionallyAllowedTenants` is set.
 
-2. AKS workload identity (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_FEDERATED_TOKEN_FILE`); its failures stop the chain, except a refused per-call tenant
-3. managed identity (`/.default` scope), using `managedIdentityClientId` or else `AZURE_CLIENT_ID`
+2. AKS workload identity (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_FEDERATED_TOKEN_FILE`); a configured workload identity stops the chain on failure
+3. managed identity (`/.default` scope), using `managedIdentityClientId` or else `AZURE_CLIENT_ID`. Requests that specify a tenant or claims, or enable CAE, skip this step.
 4. Azure CLI (`az account get-access-token`) when command execution is available
 5. Azure PowerShell (`Get-AzAccessToken` via `pwsh` or `powershell`) when command execution is available
 
