@@ -289,11 +289,28 @@ describe('AppConfigurationClient', () => {
     const client = new AppConfigurationClient(endpoint, bearer, { fetch: fetcher })
 
     await client.getConfigurationSetting('plain')
+    client.updateSyncToken('d=日本語;sn=1')
     await client.getConfigurationSetting('plain')
     await client.getConfigurationSetting('plain')
     await client.getConfigurationSetting('plain')
 
     expect(fetcher).toHaveBeenCalledTimes(responseTokens.length)
+  })
+
+  test('retains the newer sync token when sequence numbers exceed integer precision', async () => {
+    let syncToken: string | null = null
+    const fetcher = createFetchMock([
+      (_url, init) => {
+        syncToken = new Headers(init.headers).get('Sync-Token')
+        return jsonResponse({ key: 'plain', value: 'value' })
+      },
+    ])
+    const client = new AppConfigurationClient(endpoint, bearer, { fetch: fetcher })
+    client.updateSyncToken('a=b2xk;sn=9007199254740992,a=bmV3;sn=9007199254740993')
+
+    await client.getConfigurationSetting('plain')
+
+    expect(syncToken).toBe('a=bmV3')
   })
 
   test('reports service errors with status and problem details', async () => {

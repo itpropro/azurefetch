@@ -14,6 +14,7 @@ const settingContentType = 'application/vnd.microsoft.appconfig.kv+json'
 const settingAccept = 'application/vnd.microsoft.appconfig.kv+json, application/problem+json'
 const listAccept = 'application/vnd.microsoft.appconfig.kvset+json, application/problem+json'
 const syncTokenPattern = /^([^=]+)=([^;]+);sn=(\d+)$/u
+const syncTokenHeaderValue = /^[\u0020-\u007E\u0080-\u00FF]+$/u
 const reservedFilterCharacter = /([\\*,])/gu
 
 export interface AppConfigurationClientOptions extends Omit<AzureRequestOverrides, 'credential'> {
@@ -67,7 +68,7 @@ export class AppConfigurationClient {
   private readonly apiVersion: string
   private readonly prefix: string | undefined
   private readonly defaultLabel: string | null | undefined
-  private readonly syncTokens = new Map<string, { token: string; sequenceNumber: number }>()
+  private readonly syncTokens = new Map<string, { token: string; sequenceNumber: bigint }>()
 
   public constructor(
     endpoint: string,
@@ -116,9 +117,13 @@ export class AppConfigurationClient {
         continue
       }
 
-      const sequenceNumber = Number(sequence)
-      if ((this.syncTokens.get(id)?.sequenceNumber ?? -1) < sequenceNumber) {
-        this.syncTokens.set(id, { token: `${id}=${value}`, sequenceNumber })
+      const headerValue = `${id}=${value}`
+      if (!syncTokenHeaderValue.test(headerValue)) {
+        continue
+      }
+      const sequenceNumber = BigInt(sequence)
+      if ((this.syncTokens.get(id)?.sequenceNumber ?? -1n) < sequenceNumber) {
+        this.syncTokens.set(id, { token: headerValue, sequenceNumber })
       }
     }
   }
