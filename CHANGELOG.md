@@ -15,6 +15,7 @@
 * **azurefetch:** clear temporary key bytes after import ([768f52e](https://github.com/itpropro/azurefetch/commit/768f52e57ebd92049fb5b4b926460d3cb8335e68))
 * **azurefetch:** clear temporary key bytes after import ([#71](https://github.com/itpropro/azurefetch/issues/71)) ([bdd8d15](https://github.com/itpropro/azurefetch/commit/bdd8d15aaad632217cc80580cfdb903e13b52614))
 * **azurefetch:** compare sync-token sequences exactly ([1a92b10](https://github.com/itpropro/azurefetch/commit/1a92b10272390d6f0cb33d85a54f610daf773a69))
+* **azurefetch:** honor request cancellation during token acquisition ([#78](https://github.com/itpropro/azurefetch/pull/78))
 * **azurefetch:** handle out-of-range blob XML character references ([00c772d](https://github.com/itpropro/azurefetch/commit/00c772d0038886d6674420b4aa64a6ef30771944))
 * **azurefetch:** handle out-of-range blob XML character references ([#70](https://github.com/itpropro/azurefetch/issues/70)) ([885a3a4](https://github.com/itpropro/azurefetch/commit/885a3a42120e6f1b8b61cbfdd2b93fbe197a643f))
 * **azurefetch:** honor tenant and CAE credential requests ([61b974d](https://github.com/itpropro/azurefetch/commit/61b974dea5dcda3a9e4bf51e2884c74e62cb3745))
@@ -48,6 +49,10 @@
 * **blob:** omit URL queries from batch diagnostics ([7d6cdd0](https://github.com/itpropro/azurefetch/commit/7d6cdd05e06d660b8a21053ae8a18a603f43409f))
 * **blob:** validate batch response IDs ([651a7b3](https://github.com/itpropro/azurefetch/commit/651a7b3b55b757d96e603ca74bf37d50e4841757))
 * **table:** serialize OData filter literals ([acbf175](https://github.com/itpropro/azurefetch/commit/acbf175446bac85d5a690549c303e8f13eb38e7d))
+
+### Documentation
+
+* **azurefetch:** clarify how App Configuration listing filters apply to full keys ([#72](https://github.com/itpropro/azurefetch/pull/72))
 
 ## [0.6.2](https://github.com/itpropro/azurefetch/compare/v0.6.1...v0.6.2) (2026-10-25)
 
