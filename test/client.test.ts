@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { AzureClient } from '../src/client'
 import { DefaultAzureCredential } from '../src/default-azure-credential'
-import type { AccessToken } from '../src/types'
+import type { AccessToken, TokenCredential } from '../src/types'
 import { clearCredentialEnvironment, createFetchMock, getBodyString, jsonResponse } from './helpers'
 
 function recordingFetch() {
@@ -95,6 +95,29 @@ describe('AzureClient', () => {
       'https://graph.microsoft.com/.default',
     )
     expect(sentRequest(fetcher).headers.get('Authorization')).toBe('Bearer override')
+  })
+
+  test('forwards cancellation to an in-progress token request', async () => {
+    const controller = new AbortController()
+    const fetcher = recordingFetch()
+    const reason = new Error('cancelled')
+    let tokenSawAbort = false
+    const getToken: TokenCredential['getToken'] = async (_scopes, options) => {
+      const signal = options?.abortSignal
+      controller.abort(reason)
+      if (signal?.aborted === true) {
+        tokenSawAbort = true
+        throw reason
+      }
+      return { token: 'local-test', expiresOnTimestamp: 0 }
+    }
+    const client = new AzureClient({ credential: { getToken }, fetch: fetcher })
+
+    await expect(client.fetch('https://example.test', { signal: controller.signal })).rejects.toBe(
+      reason,
+    )
+    expect(tokenSawAbort).toBe(true)
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   test('calls the global fetch with the receiver browsers and workers require', async () => {
