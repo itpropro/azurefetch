@@ -414,7 +414,7 @@ describe('TableClient', () => {
     ])
   })
 
-  test('odata quotes and escapes interpolated literals like the Azure SDK', () => {
+  test('odata quotes and escapes interpolated literals', () => {
     const rowKey = "it's"
     const after = new Date('2026-01-02T03:04:05.678Z')
 
@@ -423,7 +423,11 @@ describe('TableClient', () => {
     ).toBe(
       "PartitionKey eq 'pk' and RowKey eq 'it''s' and Timestamp ge datetime'2026-01-02T03:04:05.678Z' and n lt 3",
     )
-    expect(odata`${rowKey} eq RowKey`).toBe("it''s eq RowKey")
+    expect(odata`${rowKey} eq RowKey`).toBe("'it''s' eq RowKey")
+    expect(odata`RowKey eq '${'ab'}${'cd'}'`).toBe("RowKey eq 'abcd'")
+    expect(odata`size eq ${2n}`).toBe('size eq 2L')
+    expect(odata`size eq ${2n}L`).toBe('size eq 2L')
+    expect(() => odata`RowKey eq ${{ value: 'abc' }}`).toThrow('Unsupported OData literal')
   })
 
   test('submits one atomic changeset and returns the ordered sub-responses', async () => {

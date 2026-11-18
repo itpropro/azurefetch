@@ -2,6 +2,8 @@ import { storageRequestError } from './storage-request'
 import type { StorageTransport } from './storage-request'
 import { appendUrlPath } from './storage-url'
 
+const int64Suffix = /^[Ll]\b/u
+
 export interface TableCreateIfNotExistsResponse {
   succeeded: boolean
   errorCode?: string
@@ -19,28 +21,44 @@ export function escapeODataKey(key: string): string {
 
 /**
  * Builds an OData filter such as odata`RowKey eq ${rowKey}`. Strings become quoted literals with
- * doubled apostrophes and Dates become `datetime'…'` literals. As in the Azure SDK, strings that
- * the template already quotes or that follow no text are escaped but not quoted.
+ * doubled apostrophes and Dates become `datetime'…'` literals. A string interpolated inside
+ * a quoted template literal is escaped without adding a second pair of quotes.
  */
 export function odata(strings: TemplateStringsArray, ...values: unknown[]): string {
-  return strings
-    .flatMap((text, index) =>
-      index < values.length ? [text, odataLiteral(values[index], text)] : [text],
-    )
-    .join('')
+  let filter = ''
+  let quoted = false
+  for (const [index, text] of strings.entries()) {
+    filter += text
+    if (text.split("'").length % 2 === 0) {
+      quoted = !quoted
+    }
+    if (index < values.length) {
+      const explicitInt64Suffix = int64Suffix.test(strings[index + 1] ?? '')
+      filter += odataLiteral(values[index], quoted, explicitInt64Suffix)
+    }
+  }
+  return filter
 }
 
-function odataLiteral(value: unknown, previousText: string): unknown {
+function odataLiteral(value: unknown, quoted: boolean, explicitInt64Suffix: boolean): string {
   if (value instanceof Date) {
-    return `datetime'${value.toISOString()}'`
+    const iso = Date.prototype.toISOString.call(value)
+    return quoted ? iso : `datetime'${iso}'`
   }
 
-  if (typeof value !== 'string') {
-    return value
+  if (typeof value === 'string') {
+    const escaped = value.replaceAll("'", "''")
+    return quoted ? escaped : `'${escaped}'`
+  }
+  if (typeof value === 'bigint') {
+    return quoted || explicitInt64Suffix ? String(value) : `${String(value)}L`
   }
 
-  const escaped = value.replaceAll("'", "''")
-  return previousText === '' || previousText.trim().endsWith("'") ? escaped : `'${escaped}'`
+  if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) {
+    return String(value)
+  }
+
+  throw new TypeError('Unsupported OData literal value')
 }
 
 export async function createTable(

@@ -261,6 +261,10 @@ for await (const page of table.listEntities(query).byPage()) {
 }
 ```
 
+In an `odata` template, write property names in the template itself, as with
+`PartitionKey` above. Interpolated strings are quoted values, including at the
+start of the template. Interpolated `bigint` values use the OData Int64 format.
+
 ## Credentials
 
 `AzureClient` accepts credentials implementing one of:
