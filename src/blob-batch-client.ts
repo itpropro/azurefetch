@@ -17,10 +17,13 @@ export interface BlobBatchSubmitResponse {
   subResponsesFailedCount: number
 }
 
-const contentIdPattern = /^content-id:\s*(\d+)/imu
-const statusLinePattern = /^HTTP\/1\.1 (\d{3})/mu
+const contentIdPattern = /^content-id:[\t ]*(\d+)[\t ]*$/imu
+const statusLinePattern = /^HTTP\/1\.1 (\d{3})(?:[ \r\n]|$)/u
 const errorCodePattern = /^x-ms-error-code:\s*(\S+)/imu
 const boundaryPattern = /boundary=([^;\s]+)/u
+const headerSeparator = /\r?\n\r?\n/u
+const lineSeparator = /\r?\n/u
+const boundarySuffix = /^(--)?[\t ]*$/u
 
 export class BlobBatchClient {
   private readonly url: string
@@ -36,6 +39,9 @@ export class BlobBatchClient {
     blobUrls: string[],
     options: BlobDeleteOptions = {},
   ): Promise<BlobBatchSubmitResponse> {
+    if (blobUrls.length === 0 || blobUrls.length > 256) {
+      throw new RangeError('Blob batch requires 1 to 256 blob URLs')
+    }
     const account = new URL(this.url)
     const accountPath = account.pathname.endsWith('/') ? account.pathname : `${account.pathname}/`
     const urls = blobUrls.map((blobUrl) => new URL(blobUrl))
@@ -86,10 +92,7 @@ export class BlobBatchClient {
       throw new Error('Blob batch response is missing its multipart boundary')
     }
 
-    const subResponses = parseSubResponses(await response.text(), responseBoundary)
-    if (Object.keys(subResponses).length !== blobUrls.length) {
-      throw new Error('Blob batch response does not match its sub-requests')
-    }
+    const subResponses = parseSubResponses(await response.text(), responseBoundary, urls.length)
 
     const succeeded = subResponses.filter(
       ({ status, errorCode }) => status >= 200 && status < 300 && errorCode === undefined,
@@ -103,18 +106,51 @@ export class BlobBatchClient {
 }
 
 /** Orders sub-responses by the Content-ID of the sub-request they answer. */
-function parseSubResponses(body: string, boundary: string): BlobBatchSubResponse[] {
+function parseSubResponses(
+  body: string,
+  boundary: string,
+  expected: number,
+): BlobBatchSubResponse[] {
   const subResponses: BlobBatchSubResponse[] = []
-  for (const part of body.split(`--${boundary}`)) {
-    const contentId = contentIdPattern.exec(part)?.[1]
-    const status = statusLinePattern.exec(part)?.[1]
+  const delimiter = `--${boundary}`
+  let partLines: string[] | undefined
+  let closed = false
+  for (const line of body.split(lineSeparator)) {
+    const boundaryLine = line.startsWith(delimiter)
+      ? boundarySuffix.exec(line.slice(delimiter.length))
+      : null
+    if (boundaryLine === null) {
+      partLines?.push(line)
+      continue
+    }
+    if (partLines !== undefined) {
+      addSubResponse(partLines.join('\n'))
+    }
+    if (boundaryLine[1] !== undefined) {
+      closed = true
+      break
+    }
+    partLines = []
+  }
+
+  if (!closed || Object.keys(subResponses).length !== expected) {
+    throw new Error('Blob batch response does not match its sub-requests')
+  }
+  return subResponses
+
+  function addSubResponse(part: string): void {
+    const [mimeHeaders = '', response = ''] = part.split(headerSeparator, 2)
+    const contentId = contentIdPattern.exec(mimeHeaders)?.[1]
+    const status = statusLinePattern.exec(response)?.[1]
     if (contentId !== undefined && status !== undefined) {
-      subResponses[Number(contentId)] = {
+      const index = Number(contentId)
+      if (index >= expected || subResponses[index] !== undefined) {
+        throw new Error('Blob batch response does not match its sub-requests')
+      }
+      subResponses[index] = {
         status: Number(status),
-        errorCode: errorCodePattern.exec(part)?.[1],
+        errorCode: errorCodePattern.exec(response)?.[1],
       }
     }
   }
-
-  return subResponses
 }
