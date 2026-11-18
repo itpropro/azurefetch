@@ -304,6 +304,9 @@ async function getWorkloadIdentityToken(
 ): Promise<AccessToken> {
   // Kubernetes rotates the projected token in place, so read it for every request.
   const assertion = (await readTextFile(tokenFile)).trim()
+  if (assertion.length === 0) {
+    throw new TypeError('Workload identity token file is empty')
+  }
   return await requestFormToken(
     tokenEndpoint(options, tenantId),
     {
