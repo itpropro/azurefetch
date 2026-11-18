@@ -49,9 +49,12 @@ export class AzureClient {
     // `Request` turns every body into a stream, so replayability is decided on the original body.
     const body = requestInit.body ?? (input instanceof Request ? input.body : null)
     const replayable = isReplayableBody(body)
+    // A nonempty RequestInit resets navigation state even when its values match the input.
+    const inheritReferrer =
+      input instanceof Request && (input.mode !== 'navigate' || Object.keys(requestInit).length > 0)
     const request = new Request(
       input,
-      input instanceof Request
+      inheritReferrer
         ? {
             ...requestInit,
             referrer: requestInit.referrer ?? input.referrer,
