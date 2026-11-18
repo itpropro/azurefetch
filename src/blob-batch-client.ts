@@ -17,7 +17,7 @@ export interface BlobBatchSubmitResponse {
   subResponsesFailedCount: number
 }
 
-const contentIdPattern = /^content-id:\s*(\d+)/imu
+const contentIdPattern = /^content-id:[\t ]*(\d+)[\t ]*$/imu
 const statusLinePattern = /^HTTP\/1\.1 (\d{3})/mu
 const errorCodePattern = /^x-ms-error-code:\s*(\S+)/imu
 const boundaryPattern = /boundary=([^;\s]+)/u
@@ -87,7 +87,7 @@ export class BlobBatchClient {
       throw new Error('Blob batch response is missing its multipart boundary')
     }
 
-    const subResponses = parseSubResponses(await response.text(), responseBoundary, blobUrls.length)
+    const subResponses = parseSubResponses(await response.text(), responseBoundary, urls.length)
 
     const succeeded = subResponses.filter(
       ({ status, errorCode }) => status >= 200 && status < 300 && errorCode === undefined,
