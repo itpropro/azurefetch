@@ -39,19 +39,19 @@ export function odata(strings: TemplateStringsArray, ...values: unknown[]): stri
 
 function odataLiteral(value: unknown, quoted: boolean): string {
   if (value instanceof Date) {
-    return `datetime'${value.toISOString()}'`
+    const iso = Date.prototype.toISOString.call(value)
+    return quoted ? iso : `datetime'${iso}'`
   }
 
   if (typeof value === 'string') {
     const escaped = value.replaceAll("'", "''")
     return quoted ? escaped : `'${escaped}'`
   }
+  if (typeof value === 'bigint') {
+    return quoted ? String(value) : `${String(value)}L`
+  }
 
-  if (
-    typeof value === 'boolean' ||
-    typeof value === 'bigint' ||
-    (typeof value === 'number' && Number.isFinite(value))
-  ) {
+  if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) {
     return String(value)
   }
 
