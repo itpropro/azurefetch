@@ -59,7 +59,8 @@ export class AzureClient {
     if ('signRequest' in credential) {
       await credential.signRequest(request)
     } else {
-      const signal = requestInit.signal ?? (input instanceof Request ? input.signal : undefined)
+      const signal =
+        requestInit.signal !== undefined || input instanceof Request ? request.signal : undefined
       request.headers.set('Authorization', await getAuthorizationHeader(credential, scope, signal))
     }
 

@@ -120,6 +120,20 @@ describe('AzureClient', () => {
     expect(fetcher).not.toHaveBeenCalled()
   })
 
+  test('uses the effective request signal when a caller detaches an input Request', async () => {
+    const input = new Request('https://example.test', { signal: AbortSignal.abort() })
+    const fetcher = recordingFetch()
+    const getToken = vi.fn<TokenCredential['getToken']>().mockResolvedValue({
+      token: 'local-test',
+      expiresOnTimestamp: 0,
+    })
+    const client = new AzureClient({ credential: { getToken }, fetch: fetcher })
+
+    await expect(client.fetch(input, { signal: null })).resolves.toMatchObject({ status: 204 })
+    expect(getToken.mock.calls[0]?.[1]?.abortSignal?.aborted).toBe(false)
+    expect(sentRequest(fetcher).signal.aborted).toBe(false)
+  })
+
   test('calls the global fetch with the receiver browsers and workers require', async () => {
     vi.stubGlobal('fetch', async function strictFetch(this: unknown) {
       if (this !== globalThis && this !== undefined) {
